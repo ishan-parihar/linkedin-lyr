@@ -203,30 +203,14 @@ class TestPersonTool:
         from linkedin_mcp_server.core.exceptions import AuthenticationError
         from linkedin_mcp_server.exceptions import AuthenticationStartedError
 
-        mock_browser = MagicMock()
-        mock_browser.page = MagicMock()
         monkeypatch.setattr(
-            "linkedin_mcp_server.dependencies.ensure_tool_ready_or_raise",
-            AsyncMock(return_value=None),
+            "linkedin_mcp_server.tools.person.get_ready_extractor",
+            AsyncMock(
+                side_effect=AuthenticationError("Session expired or invalid.")
+            ),
         )
         monkeypatch.setattr(
-            "linkedin_mcp_server.dependencies.get_or_create_browser",
-            AsyncMock(return_value=mock_browser),
-        )
-        monkeypatch.setattr(
-            "linkedin_mcp_server.dependencies.ensure_authenticated",
-            AsyncMock(side_effect=AuthenticationError("Session expired or invalid.")),
-        )
-        monkeypatch.setattr(
-            "linkedin_mcp_server.dependencies.get_runtime_policy",
-            lambda: "managed",
-        )
-        monkeypatch.setattr(
-            "linkedin_mcp_server.dependencies.close_browser",
-            AsyncMock(return_value=None),
-        )
-        monkeypatch.setattr(
-            "linkedin_mcp_server.dependencies.invalidate_auth_and_trigger_relogin",
+            "linkedin_mcp_server.tools.person.handle_auth_error",
             AsyncMock(
                 side_effect=AuthenticationStartedError(
                     "Session expired. A login browser window has been opened."
@@ -422,30 +406,14 @@ class TestPersonTool:
         from linkedin_mcp_server.core.exceptions import AuthenticationError
         from linkedin_mcp_server.exceptions import AuthenticationStartedError
 
-        mock_browser = MagicMock()
-        mock_browser.page = MagicMock()
         monkeypatch.setattr(
-            "linkedin_mcp_server.dependencies.ensure_tool_ready_or_raise",
-            AsyncMock(return_value=None),
+            "linkedin_mcp_server.tools.person.get_ready_extractor",
+            AsyncMock(
+                side_effect=AuthenticationError("Session expired or invalid.")
+            ),
         )
         monkeypatch.setattr(
-            "linkedin_mcp_server.dependencies.get_or_create_browser",
-            AsyncMock(return_value=mock_browser),
-        )
-        monkeypatch.setattr(
-            "linkedin_mcp_server.dependencies.ensure_authenticated",
-            AsyncMock(side_effect=AuthenticationError("Session expired or invalid.")),
-        )
-        monkeypatch.setattr(
-            "linkedin_mcp_server.dependencies.get_runtime_policy",
-            lambda: "managed",
-        )
-        monkeypatch.setattr(
-            "linkedin_mcp_server.dependencies.close_browser",
-            AsyncMock(return_value=None),
-        )
-        monkeypatch.setattr(
-            "linkedin_mcp_server.dependencies.invalidate_auth_and_trigger_relogin",
+            "linkedin_mcp_server.tools.person.handle_auth_error",
             AsyncMock(
                 side_effect=AuthenticationStartedError(
                     "Session expired. A login browser window has been opened."

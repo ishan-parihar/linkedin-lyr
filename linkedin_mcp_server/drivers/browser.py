@@ -482,3 +482,9 @@ def set_headless(headless: bool) -> None:
     """Set the headless mode for future browser instances."""
     global _headless
     _headless = headless
+
+
+def reset_browser_for_testing() -> None:
+    """Reset browser singleton state between tests."""
+    global _browser
+    _browser = None

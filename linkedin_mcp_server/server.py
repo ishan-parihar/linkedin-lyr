@@ -34,6 +34,7 @@ from linkedin_mcp_server.tools.job import register_job_tools
 from linkedin_mcp_server.tools.messaging import register_messaging_tools
 from linkedin_mcp_server.tools.person import register_person_tools
 from linkedin_mcp_server.tools.post import register_post_tools
+from linkedin_mcp_server.tools.profile_edit_registration import register_profile_edit_tools
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,7 @@ def create_mcp_server(
     register_messaging_tools(mcp, tool_timeout=tool_timeout)
     register_feed_tools(mcp, tool_timeout=tool_timeout)
     register_post_tools(mcp, tool_timeout=tool_timeout)
+    register_profile_edit_tools(mcp, tool_timeout=tool_timeout)
 
     # Register session management tool
     @mcp.tool(

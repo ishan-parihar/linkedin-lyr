@@ -57,6 +57,13 @@ TOOLS = [
     ("get_saved_jobs", "List job postings saved by the authenticated LinkedIn user"),
     # Social
     ("connect_with_person", "Send a LinkedIn connection request or accept an incoming one"),
+    # Profile editing (Voyager direct-HTTP; headless-safe, no browser)
+    ("profile_edit_status", "Check whether a live Voyager session is present for profile editing"),
+    ("update_basics", "Update top-level LinkedIn profile fields via Voyager patch.$set"),
+    ("update_profile_patch", "Apply a raw patch.$set/$delete to top-level profile fields"),
+    ("add_profile_record", "Create one record in a profile section (positions, educations, skills, ...)"),
+    ("update_profile_record", "Partial-update one section record (POST {section}/{id} patch.$set)"),
+    ("delete_profile_record", "Delete one section record (DELETE {section}/{id})"),
     # Session
     ("close_session", "Close the current browser session and clean up resources"),
     # Sidebar
@@ -274,9 +281,23 @@ def run_tool_direct(tool_name: str, args: list[str], use_json: bool = False) -> 
     # Prepare context and extractor for direct CLI execution
     ctx = MockContext()
 
-    # Pre-fetch extractor for tools that need it
-    extractor, browser, temp_profile = asyncio.run(_get_extractor_for_tool())
-    kwargs["extractor"] = extractor
+    # Profile-edit tools talk Voyager REST directly (no browser/extractor),
+    # so they neither need nor accept the injected extractor/ctx.
+    voyager_only = tool_name in {
+        "profile_edit_status",
+        "update_basics",
+        "update_profile_patch",
+        "add_profile_record",
+        "update_profile_record",
+        "delete_profile_record",
+    }
+
+    if not voyager_only:
+        # Pre-fetch extractor for tools that need it
+        extractor, browser, temp_profile = asyncio.run(_get_extractor_for_tool())
+        kwargs["extractor"] = extractor
+    else:
+        browser = None
     kwargs["ctx"] = ctx
 
     # Call the tool
