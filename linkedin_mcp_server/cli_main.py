@@ -249,6 +249,99 @@ def import_from_browser_and_exit() -> None:
         sys.exit(1)
 
 
+def export_session_and_exit() -> None:
+    """Export the live session as a portable single-wrap cookie file, probe-first (AXI format)."""
+    config = get_config()
+    configure_logging(
+        log_level=config.server.log_level,
+        json_format=not config.is_interactive and config.server.log_level != "DEBUG",
+    )
+    logger.info("LinkedIn MCP Server v%s - Export Session mode", get_version())
+
+    from pathlib import Path
+
+    from linkedin_mcp_server.obscura_cookie_import import ObscuraCookieManager
+
+    cookies = ObscuraCookieManager().load_cookies()  # flat dict from canonical list-of-dicts
+    if not cookies or "li_at" not in cookies:
+        print(_toon_kv("error", "No usable LinkedIn session found"))
+        print(_toon_kv("help", "Run `linkedin-lyr --status` or `linkedin-lyr --login` first"))
+        sys.exit(1)
+
+    from linkedin_mcp_server.voyager_auth import probe_session
+
+    verdict = probe_session(cookies)
+    if verdict != "alive":
+        print(_toon_kv("error", f"Current session is not alive ({verdict})"))
+        print(_toon_kv("help", "Run `linkedin-lyr --login` or `--import-from-browser` first"))
+        sys.exit(1)
+
+    export_path = Path(config.server.export_session).expanduser()
+    export_path.parent.mkdir(parents=True, exist_ok=True)
+    # Single-wrap portable shape per the pool/daemon invariant (#2201/#2506).
+    with open(export_path, "w") as f:
+        json.dump({"cookies": cookies}, f, indent=2)
+    os.chmod(export_path, 0o600)
+
+    print(_toon_kv("status", "success"))
+    print(_toon_kv("source", "probed"))
+    print(_toon_kv("path", str(export_path)))
+    print(_toon_kv("cookies", len(cookies)))
+    print(_toon_kv("help", "Copy this file to the target host, then run `linkedin-lyr --import-session <path>`"))
+    sys.exit(0)
+
+
+def import_session_and_exit() -> None:
+    """Import a portable cookie file (single-wrap), probe-first, persist to canonical auth root."""
+    config = get_config()
+    configure_logging(
+        log_level=config.server.log_level,
+        json_format=not config.is_interactive and config.server.log_level != "DEBUG",
+    )
+    logger.info("LinkedIn MCP Server v%s - Import Session mode", get_version())
+
+    from pathlib import Path
+
+    from linkedin_mcp_server.obscura_cookie_import import ObscuraCookieManager
+
+    import_path = Path(config.server.import_session).expanduser()
+    if not import_path.exists():
+        print(_toon_kv("error", f"Portable cookie file not found: {import_path}"))
+        sys.exit(1)
+
+    try:
+        payload = json.loads(import_path.read_text())
+    except (json.JSONDecodeError, OSError) as e:
+        print(_toon_kv("error", f"Could not read portable cookie file: {e}"))
+        sys.exit(1)
+
+    cookies = payload.get("cookies") if isinstance(payload, dict) else {}
+    if not isinstance(cookies, dict) or "li_at" not in cookies:
+        print(_toon_kv("error", "Portable file must be the single-wrap shape from --export-session"))
+        print(_toon_kv("help", "Export with `linkedin-lyr --export-session <path>` on the source host"))
+        sys.exit(1)
+
+    from linkedin_mcp_server.voyager_auth import probe_session
+
+    verdict = probe_session(cookies)
+    if verdict != "alive":
+        print(_toon_kv("error", f"Imported session failed probe ({verdict})"))
+        print(_toon_kv("help", "Export a live session from the source host and retry"))
+        sys.exit(1)
+
+    # Canonical on-disk persistence is the list-of-dicts shape the rest of the
+    # system reads; the save path owns the conversion from flat dict.
+    manager = ObscuraCookieManager()
+    manager.save_cookies(cookies)
+
+    print(_toon_kv("status", "success"))
+    print(_toon_kv("source", "probed"))
+    print(_toon_kv("path", str(manager.cookie_path)))
+    print(_toon_kv("cookies", len(cookies)))
+    print(_toon_kv("help", "Run `linkedin-lyr --status` to verify the imported session"))
+    sys.exit(0)
+
+
 def profile_info_and_exit() -> None:
     """Check profile validity and display info, then exit (AXI format)."""
     config = get_config()
@@ -659,7 +752,12 @@ def main() -> None:
         # Configure browser environment only for modes that need it
         # --import-from-browser and --status don't need it (they use browser_cookie3)
         # --login and normal server startup do need it
-        if config.server.login or not (config.server.import_from_browser or config.server.status):
+        if config.server.login or not (
+            config.server.import_from_browser
+            or config.server.export_session
+            or config.server.import_session
+            or config.server.status
+        ):
             configure_browser_environment()
 
         # Set headless mode from config
@@ -679,6 +777,12 @@ def main() -> None:
         # Handle --import-from-browser flag
         if config.server.import_from_browser:
             import_from_browser_and_exit()
+
+        # Handle --export-session / --import-session flags
+        if config.server.export_session:
+            export_session_and_exit()
+        if config.server.import_session:
+            import_session_and_exit()
 
         # Handle --login flag
         if config.server.login:

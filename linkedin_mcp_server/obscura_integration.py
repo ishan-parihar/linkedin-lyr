@@ -5,7 +5,6 @@ LinkedIn-specific ObscuraCookieManager integration.
 from __future__ import annotations
 
 import logging
-import os
 from typing import Optional
 
 from obscura_core import (
@@ -30,7 +29,12 @@ class LinkedInCookieValidator:
         self._extractor = None
 
     async def validate(self, cookies: dict[str, str]) -> bool:
-        """Validate cookies by checking required cookies are present and performing browser validation if enabled."""
+        """Verdict a cookie dict. Probe-first over direct HTTP (#2430).
+
+        Bringing stored cookies into a headless browser is what triggers
+        LinkedIn's server-side rotation (#2329), so liveness is decided with a
+        plain HTTP probe and the automated browser is never booted here.
+        """
         try:
             # Fast fail: check that required cookies are present
             required = ["li_at"]
@@ -39,48 +43,13 @@ class LinkedInCookieValidator:
                     logger.debug(f"Required cookie missing: {cookie}")
                     return False
 
-            # Full browser validation can be disabled for resource-constrained environments
-            # Set LINKEDIN_SKIP_BROWSER_VALIDATION=1 to skip browser-based validation
-            skip_browser_validation = os.getenv("LINKEDIN_SKIP_BROWSER_VALIDATION", "").lower() in (
-                "1",
-                "true",
-                "yes",
-                "on",
-            )
+            from linkedin_mcp_server.voyager_auth import aprobe_session
 
-            if skip_browser_validation:
-                logger.debug(
-                    "Skipping browser-based validation (LINKEDIN_SKIP_BROWSER_VALIDATION set)"
-                )
-                return True
-
-            # Import here to avoid circular imports
-            from linkedin_mcp_server.drivers.browser import get_or_create_browser
-
-            # Create a temporary browser with these cookies
-            browser = await get_or_create_browser()
-            page = browser.page
-
-            # Set cookies
-            cookie_list = [
-                {"name": name, "value": value, "domain": ".linkedin.com", "path": "/"}
-                for name, value in cookies.items()
-            ]
-            await page.context.add_cookies(cookie_list)
-
-            # Try to access a page
-            await page.goto(
-                "https://www.linkedin.com/feed/", wait_until="domcontentloaded", timeout=10000
-            )
-
-            # Check if we're logged in (locale-independent check)
-            is_logged_in = await page.evaluate("""() => {
-                return !document.body.innerText.includes('Sign in') && 
-                       !document.body.innerText.includes('Join now') &&
-                       document.querySelector('[data-test-global-nav-me]') !== null;
-            }""")
-
-            return is_logged_in
+            verdict = await aprobe_session(cookies)
+            if verdict != "alive":
+                logger.debug(f"Voyager probe rejected session: {verdict}")
+                return False
+            return True
         except Exception as e:
             logger.debug(f"LinkedIn cookie validation failed: {e}")
             return False

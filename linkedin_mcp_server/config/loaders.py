@@ -555,6 +555,30 @@ def load_from_args(config: AppConfig) -> AppConfig:
         ),
     )
 
+    parser.add_argument(
+        "--export-session",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Export the current LinkedIn session to a portable cookie file "
+            "(single-wrap {cookies: {flat}} shape, passes the probe-first validator). "
+            "Writes and exits."
+        ),
+    )
+
+    parser.add_argument(
+        "--import-session",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Import a portable cookie file (from --export-session elsewhere) into "
+            "the canonical auth root. Probe-first validated; session cookies only. "
+            "Imports and exits."
+        ),
+    )
+
     # AXI features
     parser.add_argument(
         "--list-tools",
@@ -740,6 +764,12 @@ def load_from_args(config: AppConfig) -> AppConfig:
     if args.import_from_browser is not None:
         value = args.import_from_browser.strip().lower()
         config.server.import_from_browser = value or "auto"
+
+    if args.export_session:
+        config.server.export_session = args.export_session
+
+    if args.import_session:
+        config.server.import_session = args.import_session
 
     # AXI features
     if args.list_tools:

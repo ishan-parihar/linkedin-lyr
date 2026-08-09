@@ -1,5 +1,6 @@
 """Helpers used by MCP tools after bootstrap gating."""
 
+import asyncio
 import logging
 from typing import NoReturn
 
@@ -24,10 +25,13 @@ from linkedin_mcp_server.exceptions import (
     LinuxBrowserDependencyError,
 )
 from linkedin_mcp_server.obscura_integration import (
+    CookieValidationResult,
     get_valid_linkedin_cookies,
     force_linkedin_cookie_refresh,
     invalidate_linkedin_auth,
 )
+from linkedin_mcp_server.session_pool import list_sessions
+from linkedin_mcp_server.voyager_auth import probe_session
 from linkedin_mcp_server.obscura_daemon_integration import (
     get_valid_linkedin_cookies_from_daemon,
 )
@@ -82,6 +86,21 @@ async def handle_auth_error(
     await invalidate_linkedin_auth(ctx)  # always raises
 
 
+async def _first_live_pool_session() -> dict[str, str] | None:
+    """Return cookies of the first pooled session that probes alive, else None.
+
+    Runs probes in a thread so the event loop never blocks on TLS handshakes.
+    Probe-first, browser-free: an empty or all-dead pool returns None and the
+    caller raises an honest "no live session" error instead of booting a
+    browser (which would rotate the stale li_at per #2329).
+    """
+    for entry in list_sessions():
+        verdict = await asyncio.to_thread(probe_session, entry.cookies)
+        if verdict == "alive":
+            return entry.cookies
+    return None
+
+
 async def get_ready_extractor(
     ctx: Context | None,
     *,
@@ -96,12 +115,20 @@ async def get_ready_extractor(
 
         if not result.valid:
             logger.warning(f"Cookie validation failed from daemon: {result.error}")
-            # Try forced refresh
-            result = await force_linkedin_cookie_refresh()
-            if not result.valid:
+            # Honest degradation (Fix 5): consult the session pool before
+            # booting a browser. Booting the obscura browser with stale li_at
+            # rotates the session server-side within ~30 min (#2329), so an
+            # empty/dead pool must produce an honest error, never a browser boot.
+            pooled = await _first_live_pool_session()
+            if pooled is not None:
+                result = CookieValidationResult(
+                    valid=True, cookies=pooled, source="pool"
+                )
+            else:
                 raise AuthenticationError(
-                    f"LinkedIn session expired: {result.error}. "
-                    "Run 'linkedin-lyr --login' to re-authenticate."
+                    "No live LinkedIn session available. Export one on a logged-in "
+                    "machine with 'linkedin-lyr --export-session <path>', import it "
+                    "here with '--import-session <path>', or run 'linkedin-lyr --login'."
                 )
 
         browser = await get_or_create_browser()

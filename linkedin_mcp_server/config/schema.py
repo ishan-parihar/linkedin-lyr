@@ -358,6 +358,8 @@ class ServerConfig:
     yes: bool = False  # Auto-confirm destructive prompts (e.g. --logout)
     # Browser key or "auto"; triggers import-from-browser-and-exit.
     import_from_browser: str | None = None
+    export_session: str | None = None
+    import_session: str | None = None
     # HTTP transport configuration
     host: str = "127.0.0.1"
     port: int = 8000
