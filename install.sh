@@ -163,6 +163,17 @@ else
     echo "Supported browsers: chrome, brave, firefox, edge, chromium, opera, vivaldi, arc"
 fi
 
+# Install AI agent skills
+info "Installing AI agent skills..."
+mkdir -p ~/.agents/skills
+
+if [ -d "$REPO_DIR/.agents/skills" ]; then
+    cp -r "$REPO_DIR/.agents/skills"/* ~/.agents/skills/
+    success "AI agent skills installed to ~/.agents/skills/"
+else
+    warning "No AI agent skills found in repository"
+fi
+
 # Print installation summary
 echo ""
 success "=========================================="
@@ -177,6 +188,7 @@ echo ""
 info "For more commands: linkedin-lyr --help"
 info "Documentation: https://github.com/ishan-parihar/linkedin-lyr"
 echo ""
+info "AI agent skills are now available in ~/.agents/skills/"
 
 # Ask if user wants to import cookies now
 if [ ! -f "$LINKEDIN_MCP_DIR/cookies.json" ]; then
