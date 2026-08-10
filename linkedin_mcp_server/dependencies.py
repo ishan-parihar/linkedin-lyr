@@ -83,7 +83,7 @@ async def handle_auth_error(
         await close_browser()
     except Exception as close_exc:
         logger.warning("Failed to close stale browser (ignored): %s", close_exc)
-    await invalidate_linkedin_auth(ctx)  # always raises
+    await invalidate_linkedin_auth()  # always raises
 
 
 async def _first_live_pool_session() -> dict[str, str] | None:

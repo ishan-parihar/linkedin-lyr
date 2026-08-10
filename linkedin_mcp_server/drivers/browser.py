@@ -60,9 +60,14 @@ def current_headless() -> bool:
     return _headless
 
 
-def profile_exists() -> bool:
-    """Check if the browser profile exists."""
-    return DEFAULT_PROFILE_DIR.exists()
+def profile_exists(profile_dir: Path | None = None) -> bool:
+    """Check whether a browser profile directory exists and is non-empty.
+
+    Mirrors :func:`linkedin_mcp_server.session_state.profile_exists` so callers
+    can pass an explicit directory; defaults to the standard profile dir.
+    """
+    profile_dir = (profile_dir or DEFAULT_PROFILE_DIR).expanduser()
+    return profile_dir.is_dir() and any(profile_dir.iterdir())
 
 
 def experimental_persist_derived_runtime() -> bool:
@@ -476,6 +481,67 @@ def get_calls_in_flight() -> int:
 def get_last_activity() -> float | None:
     """Get the timestamp of the last completed tool call."""
     return _last_activity
+
+
+async def release_if_idle() -> bool:
+    """Close the browser when another process wants it, or when we are idle.
+
+    Called after each tool call and from a background poller. Polling matters:
+    if the owner only checked between calls, a waiter that announces *after* the
+    owner's last call would block until the idle timeout while the owner sits
+    doing nothing.
+
+    Returns whether the browser was closed.
+    """
+    if _browser is None or not is_browser_initialized():
+        return False
+
+    # A tool call is using this browser's Page right now. Closing it here would
+    # fail that call with a closed-target error, which is worse than making the
+    # waiting process wait a few seconds longer; the caller's own post-call check
+    # hands over as soon as the call finishes.
+    if _calls_in_flight > 0:
+        return False
+
+    config = get_config().browser
+    lease = get_profile_lease()
+    # None means no tool call has ever run, which is idle in the strongest sense.
+    idle_for = time.monotonic() - _last_activity if _last_activity is not None else None
+
+    if lease.handoff_requested():
+        # Every handoff costs a reopen, and a reopen re-validates /feed/, so a
+        # busy pair of clients trading the browser on every call would multiply
+        # LinkedIn requests. The hold window bounds how often ownership can move.
+        #
+        # It is measured from when we took the profile, not from idleness: by
+        # the time this runs the current call has already finished, so any
+        # idle-based test would always pass and the window would never apply.
+        held = lease.held_seconds
+        never_worked = idle_for is None
+        if never_worked or held >= config.browser_min_hold_seconds:
+            logger.info(
+                "Another process is waiting for the browser; handing over (held %.1fs)",
+                held,
+            )
+            await close_browser()
+            return True
+        logger.debug(
+            "Handoff requested but held for only %.1fs of %.1fs; keeping the "
+            "browser to avoid a reopen",
+            held,
+            config.browser_min_hold_seconds,
+        )
+        return False
+
+    timeout = config.browser_idle_timeout_seconds
+    if timeout > 0 and idle_for is not None and idle_for >= timeout:
+        logger.info(
+            "Closing idle browser after %.0fs and releasing the profile", idle_for
+        )
+        await close_browser()
+        return True
+
+    return False
 
 
 def set_headless(headless: bool) -> None:
