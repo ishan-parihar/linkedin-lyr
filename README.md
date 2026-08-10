@@ -5,6 +5,7 @@
 **Give AI assistants like Claude access to LinkedIn profiles, companies, jobs, and messaging through your own browser session.**
 
 [![PyPI](https://img.shields.io/pypi/v/linkedin-lyr?color=blue)](https://pypi.org/project/linkedin-lyr/)
+[![CI](https://github.com/ishan-parihar/linkedin-lyr/actions/workflows/ci.yml/badge.svg)](https://github.com/ishan-parihar/linkedin-lyr/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 > **Disclaimer:** This is an independent, community project. It is not affiliated with, authorized by, endorsed by, or sponsored by LinkedIn Corporation or Microsoft. "LinkedIn" is a registered trademark of LinkedIn Corporation and is used here only descriptively to identify the third-party service this software interoperates with.
