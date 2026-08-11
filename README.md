@@ -6,6 +6,8 @@
 
 [![PyPI](https://img.shields.io/pypi/v/linkedin-lyr?color=blue)](https://pypi.org/project/linkedin-lyr/)
 ![LOC](https://img.shields.io/badge/LOC-50.3K-informational?style=flat-square)
+![Status](https://img.shields.io/badge/Status-Active-brightgreen)
+![Language](https://img.shields.io/badge/Python-3.11-blue?logo=python)
 [![CI](https://github.com/ishan-parihar/linkedin-lyr/actions/workflows/ci.yml/badge.svg)](https://github.com/ishan-parihar/linkedin-lyr/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
