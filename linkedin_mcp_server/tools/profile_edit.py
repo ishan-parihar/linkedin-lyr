@@ -121,8 +121,14 @@ def delete_profile_record(
 
 
 def profile_edit_status(public_id: str | None = None) -> dict[str, Any]:
-    """Read-only: is a live Voyager session present? No network, no browser."""
-    client = VoyagerProfileEditClient(public_id=public_id)
+    """Read-only: is a live Voyager session present? No network, no browser.
+
+    The ``public_id`` parameter is accepted for API compatibility but is
+    intentionally ignored — ``VoyagerProfileEditClient`` does not support
+    per-profile targeting in the current Voyager API surface (it always
+    operates on the authenticated user via ``/voyager/api/identity/profiles/me``).
+    """
+    client = VoyagerProfileEditClient()
     return {
         "session": "valid" if client.auth_ok else "missing_or_invalid",
         "public_id": client._profile_id(),
