@@ -90,7 +90,7 @@ jobs:
         run: |
           set -e
           sed -i 's/"version": ".*"/"version": "'$VERSION'"/' manifest.json
-          sed -i 's/stickerdaniel\/linkedin-mcp-server:[^ ]*/stickerdaniel\/linkedin-mcp-server:'$VERSION'/' docker-compose.yml
+          sed -i 's/ishan-parihar\/linkedin-lyr:[^ ]*/ishan-parihar\/linkedin-lyr:'$VERSION'/' docker-compose.yml
           echo "✅ Updated manifest.json and docker-compose.yml to version $VERSION"
 
       - name: Remove branch protection (temporary)
@@ -169,8 +169,8 @@ jobs:
           context: .
           push: true
           tags: |
-            stickerdaniel/linkedin-mcp-server:${{ env.VERSION }}
-            stickerdaniel/linkedin-mcp-server:latest
+            ishan-parihar/linkedin-lyr:${{ env.VERSION }}
+            ishan-parihar/linkedin-lyr:latest
           platforms: linux/amd64,linux/arm64
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -180,7 +180,7 @@ jobs:
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
-          repository: stickerdaniel/linkedin-mcp-server
+          repository: ishan-parihar/linkedin-lyr
           readme-filepath: docs/docker-hub.md
 
       - name: Optimize uv cache for CI
@@ -214,6 +214,6 @@ jobs:
       - name: Summary
         run: |
           echo "Successfully released v$VERSION!"
-          echo "Docker: stickerdaniel/linkedin-mcp-server:$VERSION"
+          echo "Docker: ishan-parihar/linkedin-lyr:$VERSION"
           echo "PyPI: https://pypi.org/project/linkedin-lyr/$VERSION/"
           echo "GitHub: https://github.com/${{ github.repository }}/releases/tag/v$VERSION"

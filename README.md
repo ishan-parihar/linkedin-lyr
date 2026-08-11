@@ -5,6 +5,7 @@
 **Give AI assistants like Claude access to LinkedIn profiles, companies, jobs, and messaging through your own browser session.**
 
 [![PyPI](https://img.shields.io/pypi/v/linkedin-lyr?color=blue)](https://pypi.org/project/linkedin-lyr/)
+![LOC](https://img.shields.io/badge/LOC-50.3K-informational?style=flat-square)
 [![CI](https://github.com/ishan-parihar/linkedin-lyr/actions/workflows/ci.yml/badge.svg)](https://github.com/ishan-parihar/linkedin-lyr/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
@@ -365,3 +366,14 @@ This project is part of a family of agent-friendly CLI tools for social platform
 MIT License - see [LICENSE](LICENSE) file for details.
 
 Use in accordance with [LinkedIn's User Agreement](https://www.linkedin.com/legal/user-agreement). Automated access may violate LinkedIn's terms and can lead to account restrictions. This tool is for personal use only and comes with no warranty of any kind.
+
+---
+
+## ☕ Support & Sponsorship
+
+If you find this project useful, consider supporting ongoing development:
+
+[![Sponsor](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?style=flat-square&logo=github)](https://github.com/sponsors/ishan-parihar)
+[![Donate](https://img.shields.io/badge/Donate-Razorpay-3395FF?style=flat-square)](https://rzp.io/rzp/ishan-parihar)
+
+Your support funds new features, releases, and infrastructure for the whole ecosystem.

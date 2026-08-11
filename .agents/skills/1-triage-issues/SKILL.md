@@ -1,12 +1,12 @@
 ---
 name: 1-triage-issues
-description: Scan all open issues and PRs in stickerdaniel/linkedin-mcp-server and rank them by urgency (severity, user impact, age, references), implementation quality (for PRs — mergeability, CI, diff scope, locale-independence, test coverage), and contributor track record (prior merged PRs, review quality, response cadence). Use when the user asks "what should I tackle first as core maintainer", "which PRs are production-ready", "triage backlog", "scan open issues", or any maintainer-prioritisation question about this repo. Outputs a ranked list with rationale per item, not a fix.
+description: Scan all open issues and PRs in ishan-parihar/linkedin-lyr and rank them by urgency (severity, user impact, age, references), implementation quality (for PRs — mergeability, CI, diff scope, locale-independence, test coverage), and contributor track record (prior merged PRs, review quality, response cadence). Use when the user asks "what should I tackle first as core maintainer", "which PRs are production-ready", "triage backlog", "scan open issues", or any maintainer-prioritisation question about this repo. Outputs a ranked list with rationale per item, not a fix.
 argument-hint: '[label-or-keyword-filter]'
 ---
 
 # Triage Open Issues and PRs
 
-Goal: in one pass, turn the live state of `stickerdaniel/linkedin-mcp-server` into a maintainer-grade priority list. Read-only. No checkout, no edits, no reproduction. Reproduction belongs in `/2-repro-issue`; PR verification in `/3-verify-pr-fix`.
+Goal: in one pass, turn the live state of `ishan-parihar/linkedin-lyr` into a maintainer-grade priority list. Read-only. No checkout, no edits, no reproduction. Reproduction belongs in `/2-repro-issue`; PR verification in `/3-verify-pr-fix`.
 
 ## Inputs
 
@@ -15,7 +15,7 @@ Goal: in one pass, turn the live state of `stickerdaniel/linkedin-mcp-server` in
 ## Phase 1 — Gather
 
 ```bash
-REPO=stickerdaniel/linkedin-mcp-server
+REPO=ishan-parihar/linkedin-lyr
 
 # Issues  (gh calls the reactions field `reactionGroups`, not `reactions`)
 gh issue list --repo $REPO --state open --limit 200 \

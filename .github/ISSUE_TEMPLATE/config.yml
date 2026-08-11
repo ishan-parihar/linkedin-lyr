@@ -2,14 +2,14 @@
 blank_issues_enabled: false
 contact_links:
   - name: 💬 General Questions & Discussion
-    url: https://github.com/stickerdaniel/linkedin-mcp-server/discussions/categories/general-questions-discussion
+    url: https://github.com/ishan-parihar/linkedin-lyr/discussions/categories/general-questions-discussion
     about: Ask questions about setup, usage, or get help from the community
   - name: 📚 Share Your Setup & Get Help with Configuration
-    url: https://github.com/stickerdaniel/linkedin-mcp-server/discussions/categories/share-your-setup-get-help-with-configuration
+    url: https://github.com/ishan-parihar/linkedin-lyr/discussions/categories/share-your-setup-get-help-with-configuration
     about: Share how you set up the MCP in your favorite client or get help with configuration
   - name: 💡 Ideas & Suggestions
-    url: https://github.com/stickerdaniel/linkedin-mcp-server/discussions/categories/ideas-suggestions
+    url: https://github.com/ishan-parihar/linkedin-lyr/discussions/categories/ideas-suggestions
     about: Share ideas for new features or improvements (before creating a formal feature request)
   - name: 🙌 Show and Tell
-    url: https://github.com/stickerdaniel/linkedin-mcp-server/discussions/categories/show-and-tell
+    url: https://github.com/ishan-parihar/linkedin-lyr/discussions/categories/show-and-tell
     about: I would love to see how you're using the LinkedIn MCP server and what you're building with it!

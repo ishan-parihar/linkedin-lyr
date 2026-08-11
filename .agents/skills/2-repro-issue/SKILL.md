@@ -1,6 +1,6 @@
 ---
 name: 2-repro-issue
-description: Reproduce a single LinkedIn-MCP issue locally on the current branch against the real authenticated LinkedIn session at ~/.linkedin/profile/, using the MCP streamable-http server. Captures the exact failure mode (tool output, error, missing data) and maps it back to the scraper code path. Use when the user says "reproduce #N", "investigate #N", "try #N locally", "verify the bug in #N", or pastes an issue URL from stickerdaniel/linkedin-mcp-server. Does NOT check out a PR or attempt a fix — that's /3-verify-pr-fix.
+description: Reproduce a single LinkedIn-MCP issue locally on the current branch against the real authenticated LinkedIn session at ~/.linkedin/profile/, using the MCP streamable-http server. Captures the exact failure mode (tool output, error, missing data) and maps it back to the scraper code path. Use when the user says "reproduce #N", "investigate #N", "try #N locally", "verify the bug in #N", or pastes an issue URL from ishan-parihar/linkedin-lyr. Does NOT check out a PR or attempt a fix — that's /3-verify-pr-fix.
 argument-hint: '<issue-number-or-url>'
 ---
 
@@ -14,7 +14,7 @@ Goal: take an issue number, run the exact failing tool call against the real Lin
 # Accept "442", "#442", or "https://github.com/.../issues/442" — extract the digits only
 NUM=$(echo "$ARGUMENTS" | sed -E 's|.*/||; s|#||g' | grep -oE '^[0-9]+' | head -1)
 [ -z "$NUM" ] && { echo "Invalid input: '$ARGUMENTS'. Pass an issue number or URL." >&2; exit 1; }
-REPO=stickerdaniel/linkedin-mcp-server
+REPO=ishan-parihar/linkedin-lyr
 
 gh issue view $NUM --repo $REPO --comments
 ```

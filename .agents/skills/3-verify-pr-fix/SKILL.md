@@ -14,7 +14,7 @@ Goal: take a PR number, check it out cleanly, re-run the same tool call that fai
 # Accept "498", "#498", or "https://github.com/.../pull/498" — extract the digits only
 PR=$(echo "$ARGUMENTS" | sed -E 's|.*/||; s|#||g' | grep -oE '^[0-9]+' | head -1)
 [ -z "$PR" ] && { echo "Invalid input: '$ARGUMENTS'. Pass a PR number or URL." >&2; exit 1; }
-REPO=stickerdaniel/linkedin-mcp-server
+REPO=ishan-parihar/linkedin-lyr
 
 gh pr view $PR --repo $REPO --json title,body,baseRefName,headRefName,headRepositoryOwner,mergeable,mergeStateStatus,additions,deletions,changedFiles,maintainerCanModify,statusCheckRollup
 ```
