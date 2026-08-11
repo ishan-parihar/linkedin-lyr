@@ -13,7 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Run server locally: `uv run -m linkedin_mcp_server --no-headless`
 - Run via uvx (PyPI/package verification only): `uvx linkedin-lyr`
 - Docker build: `docker build -t linkedin-mcp-server .`
-- Install browser: `uv run patchright install chromium`
+- Install browser: Obscura binary auto-managed via `obscura_binary_manager.py` — do NOT run `patchright install chromium` on constrained VPS environments. Obscura serves as the CDP backend; patchright/playwright are API-only (connectOverCDP).
 
 ## Scraping Rules
 
