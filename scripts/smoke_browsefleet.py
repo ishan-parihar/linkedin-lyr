@@ -71,22 +71,37 @@ def assert_(cond: bool, msg: str) -> bool:
 
 
 def check_health() -> bool:
-    """1. Fleet health over public + local."""
-    step(1, "Fleet health")
+    """1. Fleet health over public (always required) + local (thin-client: best-effort).
+
+    On a thin-client VPS there is no local BrowseFleet container — only the
+    Cloudflare-tunneled public endpoint exists. We require the public one and
+    treat the local probe as a soft check (it still prints + returns True if
+    the host happens to run the fleet container).
+    """
+    step(1, "Fleet health (public required, local best-effort)")
     import httpx
 
-    results = []
-    for label, url in [("public", BF_URL), ("local", BF_LOCAL)]:
-        try:
-            r = httpx.get(f"{url}/health", headers={"x-api-key": BF_TOKEN}, timeout=10)
-            ok_local = r.status_code == 200 and r.json().get("status") == "ok"
-            if assert_(ok_local, f"{label} {url}/health → {r.json()}"):
-                results.append(True)
-            else:
-                results.append(False)
-        except Exception as exc:
-            fail(f"{label} {url}/health raised {exc!r}")
+    results: list[bool] = []
+    # Public: required.
+    try:
+        r = httpx.get(f"{BF_URL}/health", headers={"x-api-key": BF_TOKEN}, timeout=10)
+        ok_public = r.status_code == 200 and r.json().get("status") == "ok"
+        if assert_(ok_public, f"public {BF_URL}/health → {r.json()}"):
+            results.append(True)
+        else:
             results.append(False)
+    except Exception as exc:
+        fail(f"public {BF_URL}/health raised {exc!r}")
+        results.append(False)
+    # Local: best-effort (thin-client VPS has no container).
+    try:
+        r = httpx.get(f"{BF_LOCAL}/health", headers={"x-api-key": BF_TOKEN}, timeout=5)
+        if r.status_code == 200 and r.json().get("status") == "ok":
+            ok(f"local {BF_LOCAL}/health → {r.json().get('status')}")
+        else:
+            info(f"local {BF_LOCAL}/health → {r.status_code} (expected on thin-client VPS)")
+    except Exception as exc:
+        info(f"local {BF_LOCAL}/health unreachable (expected on thin-client VPS): {type(exc).__name__}")
     return all(results)
 
 
