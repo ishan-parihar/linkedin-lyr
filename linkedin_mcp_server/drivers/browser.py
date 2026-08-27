@@ -7,7 +7,6 @@ automatic profile persistence.
 """
 
 import asyncio
-import json
 import logging
 import os
 import time
@@ -15,37 +14,30 @@ from pathlib import Path
 from typing import Any
 
 from linkedin_mcp_server.common_utils import harden_linkedin_tree, secure_mkdir
+from linkedin_mcp_server.config import get_config
 from linkedin_mcp_server.core import (
     AuthenticationError,
-    detect_auth_barrier_quick,
-    detect_rate_limit,
     goto_reporting_proxy_errors,
-    is_logged_in,
     proxy_hint,
     raise_if_proxy_configured,
-    redact_proxy_credentials,
     raise_if_proxy_error,
-    resolve_remember_me_prompt,
+    redact_proxy_credentials,
 )
+from linkedin_mcp_server.core.browser_backend import should_use_browsefleet
 from linkedin_mcp_server.core.obscura_browser import (
     ObscuraBrowserManager,
 )
-
-
-from linkedin_mcp_server.common_utils import utcnow_iso
-from linkedin_mcp_server.config import get_config
 from linkedin_mcp_server.debug_trace import record_page_trace
 from linkedin_mcp_server.debug_utils import stabilize_navigation
 from linkedin_mcp_server.exceptions import (
-    BrowserBusyError,
     BrowserShutdownUnconfirmedError,
 )
 from linkedin_mcp_server.profile_lease import get_profile_lease
 
 # Default persistent profile directory
 DEFAULT_PROFILE_DIR = Path.home() / ".linkedin-lyr" / "profile"
-# Global browser instance (singleton)
-_browser: ObscuraBrowserManager | None = None
+# Global browser instance (singleton) — Obscura or BrowseFleet depending on backend.
+_browser: Any | None = None  # ObscuraBrowserManager | BrowseFleetBrowserManager
 _browser_cookie_export_path: Path | None = None
 _headless: bool = True
 
@@ -112,15 +104,15 @@ def _debug_skip_checkpoint_restart() -> bool:
     )
 
 
-def _apply_browser_settings(browser: ObscuraBrowserManager) -> None:
+def _apply_browser_settings(browser: Any) -> None:
     """Apply configuration settings to browser instance."""
-    config = get_config()
+    get_config()
     # Obscura doesn't have page timeout settings like Playwright
     # Settings are applied via command-line arguments during fetch
 
 
 async def _log_feed_failure_context(
-    browser: ObscuraBrowserManager,
+    browser: Any,
     reason: str,
 ) -> None:
     """Log the page state when /feed/ validation fails.
@@ -141,7 +133,7 @@ async def _log_feed_failure_context(
 
 
 async def _feed_auth_succeeds(
-    browser: ObscuraBrowserManager,
+    browser: Any,
     *,
     allow_remember_me: bool = True,
 ) -> bool:
@@ -212,11 +204,25 @@ def _make_browser(
     launch_options: dict[str, Any],
     viewport: dict[str, int],
     user_agent: str | None = None,
-) -> ObscuraBrowserManager:
-    """Build an ObscuraBrowserManager. An explicit USER_AGENT (env/CLI) always wins;
-    *user_agent* is the session's own UA (the source browser's, recorded at
-    import time) and applies only when no override is configured."""
+) -> Any:
+    """Build a browser manager for the selected backend. An explicit USER_AGENT (env/CLI)
+    always wins; *user_agent* is the session's own UA (recorded at import) and applies
+    only when no override is configured."""
     config = get_config()
+
+    if should_use_browsefleet():
+        from linkedin_mcp_server.core.browsefleet_browser import BrowseFleetBrowserManager
+
+        logger.info("Creating BrowseFleet browser instance (remote pool)")
+        return BrowseFleetBrowserManager(
+            user_data_dir=profile_dir,
+            headless=_headless,
+            slow_mo=config.browser.slow_mo,
+            user_agent=config.browser.user_agent or user_agent,
+            viewport=viewport,
+            profile_id=config.browser.browsefleet_profile_id,
+            **launch_options,
+        )
 
     logger.info("Creating Obscura browser instance")
     return ObscuraBrowserManager(
@@ -235,7 +241,7 @@ async def _authenticate_existing_profile(
     launch_options: dict[str, Any],
     viewport: dict[str, int],
     user_agent: str | None = None,
-) -> ObscuraBrowserManager:
+) -> Any:
     browser = _make_browser(
         profile_dir,
         launch_options=launch_options,
@@ -268,6 +274,10 @@ async def _authenticate_existing_profile(
 async def validate_imported_cookies(
     cookie_path: Path, profile_dir: Path, *, user_agent: str | None = None
 ) -> bool:
+    # BrowseFleet validates via its own session; skip the heavy Obscura check
+    # when browsefleet is selected — the next tool call will prove /feed/ itself.
+    if should_use_browsefleet():
+        return True
     """Validate freshly imported cookies against /feed/ before persisting.
 
     Starts an Obscura browser on *profile_dir*, injects the LinkedIn cookies
@@ -328,7 +338,7 @@ async def validate_imported_cookies(
 
 async def get_or_create_browser(
     headless: bool | None = None,
-) -> ObscuraBrowserManager:
+) -> Any:
     """
     Get existing browser or create and initialize a new one.
 
@@ -362,7 +372,7 @@ async def get_or_create_browser(
         return _browser
 
 
-async def _create_browser() -> ObscuraBrowserManager:
+async def _create_browser() -> Any:
     """Create browser singleton with locking."""
     async with _browser_create_lock:
         if _browser is not None:
@@ -370,7 +380,7 @@ async def _create_browser() -> ObscuraBrowserManager:
         return await _create_browser_locked()
 
 
-async def _create_browser_locked() -> ObscuraBrowserManager:
+async def _create_browser_locked() -> Any:
     """Create browser singleton when already holding the lock."""
     global _browser, _browser_cookie_export_path, _browser_holds_lease
 
@@ -446,8 +456,21 @@ def get_source_profile_dir() -> Path:
 
 
 def get_current_backend() -> str:
-    """Get the current browser backend (always 'obscura')."""
-    return "obscura"
+    """Get the current browser backend (``obscura`` or ``browsefleet``)."""
+    from linkedin_mcp_server.core.browser_backend import get_browser_backend
+
+    return get_browser_backend()
+
+
+# Back-compat alias for tests that monkeypatch ``linkedin_mcp_server.drivers.browser.BrowserManager``.
+# Resolves lazily to the Obscura manager so the existing patch surface
+# (``patch(...BrowserManager, return_value=...)``) still works.
+def __getattr__(name: str) -> Any:
+    if name == "BrowserManager":
+        from linkedin_mcp_server.core.obscura_browser import ObscuraBrowserManager
+
+        return ObscuraBrowserManager
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def is_browser_initialized() -> bool:

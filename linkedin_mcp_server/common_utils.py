@@ -3,11 +3,58 @@
 from __future__ import annotations
 
 import os
+import re
 import stat
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
-import re
-import tempfile
+
+
+def _load_env_file(path: Path) -> None:
+    """Source *path* into the environment via setdefault (explicit env wins)."""
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        return
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        # Allow leading 'export ' as used by bf CLI's .browsefleet.env
+        if line.startswith("export "):
+            line = line[7:].strip()
+            if "=" not in line:
+                continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        os.environ.setdefault(key, value.strip().strip('"').strip("'"))
+        # Back-compat alias: some installs use BROWSEFLEET_API_KEY
+        if key == "BROWSEFLEET_API_KEY":
+            os.environ.setdefault("BROWSEFLEET_TOKEN", value.strip().strip('"').strip("'"))
+
+
+def load_proxy_env() -> None:
+    """Source ``~/.linkedin-lyr/proxy.env`` and BrowseFleet envs (setdefault).
+
+    Deployments behind a different egress than the machine's default (e.g. a
+    VPS routing LinkedIn through a home residential SOCKS tunnel) declare it
+    once in that file; every entrypoint — console script, ``python -m``, MCP
+    server mode — inherits it without per-consumer configuration. Explicit
+    environment always wins.
+
+    Also sources BrowseFleet thin-client envs so a single ``bf.env`` or
+    ``~/.browsefleet.env`` is enough for the VPS to speak to
+    ``https://browsefleet.ishanparihar.com`` without per-job exports:
+      - ``~/.linkedin-lyr/bf.env``  (preferred, LINKEDIN_* + BROWSEFLEET_*)
+      - ``~/.browsefleet.env``        (bf CLI install, BROWSEFLEET_URL/TOKEN)
+      - ``~/.linkedin-lyr/proxy.env`` (SOCS egress)
+    Order is bf.env → browsefleet.env → proxy.env so an explicit
+    LINKEDIN_BROWSER_BACKEND=browsefleet in bf.env is not shadowed.
+    """
+    _load_env_file(Path.home() / ".linkedin-lyr" / "bf.env")
+    _load_env_file(Path.home() / ".browsefleet.env")
+    _load_env_file(Path.home() / ".linkedin-lyr" / "proxy.env")
+
 
 _PRIVATE_DIR_MODE = 0o700
 

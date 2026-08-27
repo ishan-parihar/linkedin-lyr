@@ -114,6 +114,12 @@ class EnvironmentKeys:
     AUTO_IMPORT_FROM_BROWSER = "AUTO_IMPORT_FROM_BROWSER"
     EAGER_FULL_CHROMIUM = "EAGER_FULL_CHROMIUM"
     DAEMON_ENABLED = "DAEMON_ENABLED"
+    # BrowseFleet (remote CloakBrowser pool)
+    BROWSEFLEET_URL = "BROWSEFLEET_URL"
+    BROWSEFLEET_TOKEN = "BROWSEFLEET_TOKEN"
+    BROWSEFLEET_PROFILE_ID = "BROWSEFLEET_PROFILE_ID"
+    BROWSEFLEET_TIMEOUT = "BROWSEFLEET_TIMEOUT"
+    LINKEDIN_BROWSER_BACKEND = "LINKEDIN_BROWSER_BACKEND"
 
 
 def is_interactive_environment() -> bool:
@@ -323,6 +329,19 @@ def load_from_env(config: AppConfig) -> AppConfig:
         elif daemon_value in TRUTHY_VALUES:
             config.server.daemon_enabled = True
 
+    # BrowseFleet (remote CloakBrowser pool) — thin-client mode for VPS
+    if bf_url := os.environ.get(EnvironmentKeys.BROWSEFLEET_URL):
+        config.browser.browsefleet_url = bf_url.strip() or None
+    if bf_token := os.environ.get(EnvironmentKeys.BROWSEFLEET_TOKEN):
+        config.browser.browsefleet_token = bf_token.strip() or None
+    if bf_profile := os.environ.get(EnvironmentKeys.BROWSEFLEET_PROFILE_ID):
+        config.browser.browsefleet_profile_id = bf_profile.strip() or None
+    if bf_timeout := os.environ.get(EnvironmentKeys.BROWSEFLEET_TIMEOUT):
+        try:
+            config.browser.browsefleet_timeout_ms = int(bf_timeout)
+        except ValueError:
+            raise ConfigurationError(f"Invalid BROWSEFLEET_TIMEOUT: '{bf_timeout}'. Must be an integer (ms).")
+
     return config
 
 
@@ -512,6 +531,35 @@ def load_from_args(config: AppConfig) -> AppConfig:
         default=None,
         metavar="HOSTS",
         help="Comma-separated hosts to reach directly instead of via the proxy",
+    )
+
+    # BrowseFleet (remote CloakBrowser pool) — thin-client mode for VPS
+    parser.add_argument(
+        "--browsefleet-url",
+        type=str,
+        default=None,
+        metavar="URL",
+        help="BrowseFleet endpoint (e.g. https://browsefleet.ishanparihar.com). Enables remote browser pool.",
+    )
+    parser.add_argument(
+        "--browsefleet-token",
+        type=str,
+        default=None,
+        metavar="TOKEN",
+        help="BrowseFleet API key (x-api-key). Prefer BROWSEFLEET_TOKEN env.",
+    )
+    parser.add_argument(
+        "--browsefleet-profile",
+        type=str,
+        default=None,
+        metavar="ID",
+        help="BrowseFleet profileId for persistent LinkedIn cookies (reuses across sessions).",
+    )
+    parser.add_argument(
+        "--browser-backend",
+        choices=["obscura", "browsefleet"],
+        default=None,
+        help="Browser backend: obscura (local binary, default) or browsefleet (remote pool).",
     )
 
     # Session management
@@ -792,6 +840,16 @@ def load_from_args(config: AppConfig) -> AppConfig:
 
     if args.daemon_enabled is not None:
         config.server.daemon_enabled = args.daemon_enabled
+
+    # BrowseFleet CLI overrides
+    if getattr(args, "browsefleet_url", None):
+        config.browser.browsefleet_url = args.browsefleet_url  # type: ignore[attr-defined]
+    if getattr(args, "browsefleet_token", None):
+        config.browser.browsefleet_token = args.browsefleet_token  # type: ignore[attr-defined]
+    if getattr(args, "browsefleet_profile", None):
+        config.browser.browsefleet_profile_id = args.browsefleet_profile  # type: ignore[attr-defined]
+    if getattr(args, "browser_backend", None):  # type: ignore[attr-defined]
+        os.environ["LINKEDIN_BROWSER_BACKEND"] = args.browser_backend  # type: ignore[attr-defined]
 
     return config
 

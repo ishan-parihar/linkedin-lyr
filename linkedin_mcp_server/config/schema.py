@@ -144,6 +144,14 @@ class BrowserConfig:
     # never downloads the larger full-chromium binary unless interactive login is
     # actually triggered. Set True to pre-warm the headed login fallback.
     eager_full_chromium: bool = False
+    # --- BrowseFleet (remote CloakBrowser pool) ---
+    # When set, ``LINKEDIN_BROWSER_BACKEND=browsefleet`` routes scraping through
+    # https://browsefleet.ishanparihar.com (HTTP + CDP) instead of the local
+    # Obscura binary. This is the thin-client mode for the 2.4 GB RackNerd VPS.
+    browsefleet_url: str | None = None
+    browsefleet_token: str | None = field(default=None, repr=False)
+    browsefleet_profile_id: str | None = None
+    browsefleet_timeout_ms: int = 30000
 
     def validate(self) -> None:
         """Validate browser configuration values."""
@@ -222,6 +230,17 @@ class BrowserConfig:
                 raise ConfigurationError(f"chrome_path '{self.chrome_path}' does not exist")
             if not chrome_path.is_file():
                 raise ConfigurationError(f"chrome_path '{self.chrome_path}' is not a file")
+        if self.browsefleet_timeout_ms <= 0:
+            raise ConfigurationError(
+                f"browsefleet_timeout_ms must be positive, got {self.browsefleet_timeout_ms}"
+            )
+        if self.browsefleet_url is not None:
+            # Minimal URL sanity — full validation happens in the browser manager.
+            parsed = self.browsefleet_url.strip()
+            if not parsed.startswith(("http://", "https://")):
+                raise ConfigurationError(
+                    f"browsefleet_url must be http(s)://host, got '{self.browsefleet_url}'"
+                )
         self._normalize_proxy()
 
     def _normalize_proxy(self) -> None:

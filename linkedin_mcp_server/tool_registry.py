@@ -9,9 +9,7 @@ import asyncio
 import json
 import logging
 import os
-import shutil
 import sys
-import tempfile
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -61,7 +59,10 @@ TOOLS = [
     ("profile_edit_status", "Check whether a live Voyager session is present for profile editing"),
     ("update_basics", "Update top-level LinkedIn profile fields via Voyager patch.$set"),
     ("update_profile_patch", "Apply a raw patch.$set/$delete to top-level profile fields"),
-    ("add_profile_record", "Create one record in a profile section (positions, educations, skills, ...)"),
+    (
+        "add_profile_record",
+        "Create one record in a profile section (positions, educations, skills, ...)",
+    ),
     ("update_profile_record", "Partial-update one section record (POST {section}/{id} patch.$set)"),
     ("delete_profile_record", "Delete one section record (DELETE {section}/{id})"),
     # Session
@@ -110,12 +111,13 @@ def toon_print_dict(data: Any, indent: int = 0) -> None:
 
 async def _get_extractor_for_tool():
     """Get a LinkedIn extractor for direct CLI execution."""
-    from linkedin_mcp_server.bootstrap import initialize_bootstrap
-    from linkedin_mcp_server.core.obscura_browser import ObscuraBrowserManager
-    from linkedin_mcp_server.scraping import LinkedInExtractor
-    from linkedin_mcp_server.core.exceptions import AuthenticationError
-    from linkedin_mcp_server.session_state import portable_cookie_path
     from pathlib import Path
+
+    from linkedin_mcp_server.bootstrap import initialize_bootstrap
+    from linkedin_mcp_server.core.browser_backend import should_use_browsefleet
+    from linkedin_mcp_server.core.exceptions import AuthenticationError
+    from linkedin_mcp_server.scraping import LinkedInExtractor
+    from linkedin_mcp_server.session_state import portable_cookie_path
 
     browser = None
     temp_profile = None
@@ -125,7 +127,7 @@ async def _get_extractor_for_tool():
 
         # Read cookies directly from portable cookie path
         cookie_path = portable_cookie_path()
-        with open(cookie_path, "r") as f:
+        with open(cookie_path) as f:
             cookies_data = json.load(f)
 
         # Handle both dict format and list format
@@ -158,6 +160,7 @@ async def _get_extractor_for_tool():
         # Just verify they're there and readable
         cookie_file = Path(temp_profile) / "cookies.json"
         if not cookie_file.exists():
+            cookie_file.parent.mkdir(parents=True, exist_ok=True)
             logger.warning("No cookies found in main profile, writing from portable cookies")
             cookie_list = [
                 {
@@ -177,7 +180,14 @@ async def _get_extractor_for_tool():
         else:
             logger.info(f"Using existing cookies from {cookie_file}")
 
-        browser = ObscuraBrowserManager(user_data_dir=temp_profile, headless=True)
+        if should_use_browsefleet():
+            from linkedin_mcp_server.core.browsefleet_browser import BrowseFleetBrowserManager
+
+            browser = BrowseFleetBrowserManager(user_data_dir=temp_profile, headless=True)
+        else:
+            from linkedin_mcp_server.core.obscura_browser import ObscuraBrowserManager
+
+            browser = ObscuraBrowserManager(user_data_dir=temp_profile, headless=True)
         await browser.start()
         page = browser.page
 
@@ -259,6 +269,50 @@ def run_tool_direct(tool_name: str, args: list[str], use_json: bool = False) -> 
                 f"Unexpected positional arg: '{val}'",
                 f"Tool `{tool_name}` expects: {', '.join(required_params)}",
             )
+
+    # ── Hard timeout via OS-level supervisor ─────────────────────────────
+    # The direct CLI path used to hang FOREVER when a browser boot or tool
+    # wedged (dead Obscura child, authwall loop). In-process timeouts are
+    # insufficient: asyncio.run() teardown itself blocks on tasks that refuse
+    # cancellation, and that blocked teardown also defers SIGALRM delivery
+    # (all observed 2026-08-26). So the real work runs in a forked child in
+    # its own process group; the parent kills the whole group at the wall.
+    import signal
+    import subprocess
+
+    from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
+
+    timeout_s = float(os.environ.get("LINKEDIN_TOOL_TIMEOUT", DEFAULT_TOOL_TIMEOUT_SECONDS))
+
+    if os.environ.get("LINKEDIN_LYR_CHILD") != "1":
+        env = dict(os.environ, LINKEDIN_LYR_CHILD="1")
+        try:
+            proc = subprocess.Popen(
+                [sys.executable, sys.argv[0]] + sys.argv[1:],
+                env=env,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            axi_error("Failed to launch tool subprocess", str(exc))
+        try:
+            rc = proc.wait(timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                proc.kill()
+            try:
+                proc.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                pass
+            axi_error(
+                f"LinkedIn operation exceeded {timeout_s:.0f}s hard limit",
+                "Killed the wedged process tree (browser boot or tool did not "
+                "complete). Retry once; if it repeats, check "
+                "`linkedin-lyr --status` and refresh cookies via "
+                "`linkedin-lyr --import-from-browser`.",
+            )
+        sys.exit(rc if rc >= 0 else 1)
 
     # Type coercion from schema
     for key, val in list(kwargs.items()):
