@@ -20,8 +20,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import sys
+from pathlib import Path
 
 BF_URL = "https://browsefleet.ishanparihar.com"
 BF_TOKEN = "49f7c273ef86c3e7d108f1aa72682bc0"
@@ -119,23 +121,65 @@ def check_session_create() -> str | None:
 
 
 def check_brave_cookies() -> dict[str, str] | None:
-    """3. Brave extraction + liveness probe."""
-    step(3, "Brave-Origin cookies extract + probe")
-    from linkedin_mcp_server.browser_cookie_extractor import extract_linkedin_cookies
-    from linkedin_mcp_server.voyager_auth import probe_session
+    """3. Cookie source (portable file OR live browser) + liveness probe.
 
-    data = extract_linkedin_cookies()
-    cookies = data.get("all_cookies", {})
-    if not assert_(len(cookies) > 0, f"extracted {len(cookies)} cookies"):
+    On thin-client hosts (RackNerd VPS, no local browser) the portable
+    cookie file is the only source. On a workstation, the live Brave is
+    preferred and probed. Either path returns ``None`` when no source
+    has usable cookies — the smoke then warns and continues so the
+    fleet/tunnel checks still report cleanly.
+    """
+    step(3, "Cookie source + liveness probe")
+    cookies: dict[str, str] = {}
+
+    # 1. Live browser (Brave-Origin etc) — workstation hosts.
+    try:
+        from linkedin_mcp_server.browser_cookie_extractor import extract_linkedin_cookies
+        from linkedin_mcp_server.voyager_auth import probe_session
+
+        data = extract_linkedin_cookies()
+        live = (data or {}).get("all_cookies") or {}
+        if live and "li_at" in live:
+            verdict = probe_session(live)
+            if verdict == "alive":
+                cookies = live
+                ok(f"live Brave: {len(cookies)} cookies, probe → alive (li_at len={len(cookies['li_at'])})")
+            else:
+                warn(f"live Brave probe → {verdict} (cookies will be tried from portable file)")
+                cookies = live  # still record; the linkedin-load step below will re-probe
+    except Exception as exc:
+        warn(f"live browser extract skipped: {exc!r}")
+
+    # 2. Portable file (always present on a working linkedin-lyr install).
+    portable_path = Path.home() / ".linkedin-lyr" / "cookies.json"
+    if portable_path.exists():
+        try:
+            data = json.loads(portable_path.read_text())
+            flat: dict[str, str] = {}
+            if isinstance(data, dict):
+                if "cookies" in data and isinstance(data["cookies"], dict):
+                    flat = {k: str(v) for k, v in data["cookies"].items()}
+                elif "cookies" in data and isinstance(data["cookies"], list):
+                    flat = {c["name"]: str(c["value"]) for c in data["cookies"] if "name" in c}
+                else:
+                    flat = {k: str(v) for k, v in data.items() if isinstance(v, str)}
+            elif isinstance(data, list):
+                flat = {c["name"]: str(c["value"]) for c in data if isinstance(c, dict) and "name" in c}
+            if flat and "li_at" in flat:
+                if not cookies:
+                    cookies = flat
+                    ok(f"portable file: {len(flat)} cookies (no live browser to compare)")
+                else:
+                    # Prefer the live one (already set above); mention portable as fallback.
+                    info(f"portable file fallback available: {len(flat)} cookies (li_at len={len(flat['li_at'])})")
+        except Exception as exc:
+            warn(f"portable cookie parse failed: {exc!r}")
+
+    if not cookies or "li_at" not in cookies:
+        warn("no li_at available — LinkedIn content step will use the BROWSEFLEET profile (operatorMode login)")
         return None
-    assert_("li_at" in cookies, "li_at present")
-    assert_("bscookie" in cookies or "bcookie" in cookies, "bcookie present")
-    verdict = probe_session(cookies)
-    if verdict == "alive":
-        ok(f"probe_session → {verdict} (li_at len={len(cookies['li_at'])})")
-        return cookies
-    warn(f"probe_session → {verdict} (BrowserFleet profile login still required)")
-    # We still return cookies — the smoke continues so we can see what fleet does.
+    if "li_at" in cookies and not any(cookies.get(k) for k in ("bcookie", "bscookie")):
+        warn(f"li_at present but no bcookie/bscookie ({len(cookies)} cookies total)")
     return cookies
 
 
@@ -195,8 +239,10 @@ def main() -> int:
     sid = check_session_create()
     results.append(sid is not None)
     cookies = check_brave_cookies()
-    results.append(cookies is not None)
-    if cookies is not None:
+    if cookies is None:
+        # Thin-client: skip the linkedin-load check, fleet/tunnel still reported.
+        warn("skipping LinkedIn content check (no cookies on this host)")
+    else:
         try:
             results.append(asyncio.run(check_linkedin_with_bf(cookies)))
         except KeyboardInterrupt:
