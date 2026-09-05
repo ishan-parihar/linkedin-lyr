@@ -31,6 +31,10 @@ if len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
 
 def main() -> None:
     """Main entry point for MCP server mode."""
+    from linkedin_mcp_server.common_utils import load_proxy_env
+
+    load_proxy_env()
+
     from linkedin_mcp_server.cli_main import main as cli_main
 
     cli_main()

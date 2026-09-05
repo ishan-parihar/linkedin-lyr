@@ -6,6 +6,14 @@ import os
 
 def main() -> None:
     """Handle tool interception or delegate to MCP server mode."""
+    # Source BrowseFleet/Obscura env files BEFORE any backend decision.
+    # Without this, LINKEDIN_BROWSER_BACKEND=browsefleet in ~/.linkedin-lyr/bf.env
+    # is invisible to should_use_browsefleet() in direct-tool mode, and every
+    # invocation falls back to Obscura — which wedges on a headless VPS.
+    from linkedin_mcp_server.common_utils import load_proxy_env
+
+    load_proxy_env()
+
     # ── Direct tool invocation: linkedin-lyr <tool_name> [args...] ──────
     if len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
         # Set environment variable early before any imports
