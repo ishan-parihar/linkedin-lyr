@@ -30,7 +30,15 @@ OBSURA_API_URL = f"https://api.github.com/repos/{OBSURA_REPO}/releases/latest"
 OBSURA_RELEASES_URL = f"https://github.com/{OBSURA_REPO}/releases"
 
 # Binary installation paths
-DEFAULT_BINARY_PATH = Path("/tmp/obscura")
+# Prefer ~/.local/bin (persistent across reboots) over /tmp (tmpfs, wiped at boot).
+DEFAULT_BINARY_PATH = Path.home() / ".local" / "bin" / "obscura"
+FALLBACK_BINARY_PATHS = [
+    DEFAULT_BINARY_PATH,
+    Path("/usr/local/bin/obscura"),
+    Path("/usr/bin/obscura"),
+    Path("/opt/obscura/obscura"),
+    Path.home() / "obscura-bin" / "obscura",
+]
 METADATA_FILE = Path.home() / ".linkedin-lyr" / "obscura_metadata.json"
 
 
@@ -67,12 +75,50 @@ class ObscuraBinaryManager:
             # Return a fallback version if API fails
             return "0.1.11"  # Known working version
 
+    def _find_existing_binary(self) -> Path | None:
+        """Walk the fallback locations and return the first existing binary.
+
+        /tmp is wiped on reboot, so a missing binary there is not a reason to
+        re-download; the binary may already live at ~/.local/bin or any other
+        stable location. Returns None only when truly not installed anywhere.
+        """
+        for path in FALLBACK_BINARY_PATHS:
+            try:
+                if path.exists() and path.is_file() and os.access(path, os.X_OK):
+                    return path
+            except Exception:
+                continue
+        # Last-ditch: PATH lookup
+        path_on_path = shutil.which("obscura")
+        if path_on_path:
+            return Path(path_on_path)
+        return None
+
     async def download_latest_binary(self, force: bool = False) -> Path:
         """Download the latest Obscura binary for the current platform."""
-        # Check if we need to update
-        if not force and await self.is_up_to_date():
-            logger.info("Obscura binary is up to date")
-            return self.binary_path
+        # If an existing binary is present anywhere (not just DEFAULT path),
+        # prefer it. Only download when truly missing or `force=True`.
+        existing = self._find_existing_binary()
+        if existing and not force:
+            # If the discovered binary is NOT our default path, sync it there
+            # so subsequent runs find it without re-searching.
+            if existing != self.binary_path:
+                try:
+                    self.binary_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(existing, self.binary_path)
+                    os.chmod(self.binary_path, 0o755)
+                    logger.info(
+                        "Obscura binary already present at %s, mirrored to %s",
+                        existing, self.binary_path,
+                    )
+                except Exception as e:
+                    logger.warning("Could not mirror existing binary: %s", e)
+                    # Still okay — caller can use the original location
+                    return existing
+            if await self.is_up_to_date():
+                logger.info("Obscura binary is up to date")
+                return self.binary_path
+            # Fallthrough: stale, but present. Update in background-ish.
 
         logger.info("Downloading latest Obscura binary...")
 
@@ -108,16 +154,19 @@ class ObscuraBinaryManager:
 
                 logger.info("Successfully installed Obscura %s", latest_version)
                 return self.binary_path
-
             finally:
                 # Cleanup temp directory
                 shutil.rmtree(temp_dir, ignore_errors=True)
         except Exception as e:
-            logger.error("Failed to download Obscura binary: %s", e)
-            # If binary exists, return it even if download failed
-            if self.binary_path.exists():
-                logger.info("Using existing Obscura binary despite download failure")
-                return self.binary_path
+            logger.warning(
+                "Obscura download/update failed (using existing binary if present): %s", e
+            )
+            # If ANY binary exists, use it — never blow up on a 404 from
+            # the releases endpoint. LinkedIn login should still work with
+            # the previous binary version.
+            fallback = self._find_existing_binary()
+            if fallback:
+                return fallback
             raise
 
     def _get_download_url(self, version: str) -> Optional[str]:

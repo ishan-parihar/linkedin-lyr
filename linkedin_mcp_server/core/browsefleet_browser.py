@@ -298,7 +298,53 @@ class BrowseFleetBrowserManager:
 
         if resp.status_code not in (200, 201):
             body = resp.text[:500]
-            raise RuntimeError(f"BrowseFleet session creation failed ({resp.status_code}): {body}")
+            # Auto-heal: profile lock leftover from a crashed browser. If the
+            # BF server has the unlock endpoint (≥v1.2.0), call it once and
+            # retry the session creation a single time. The endpoint deletes
+            # stale Chromium SingletonLock/SingletonSocket/SingletonCookie
+            # files from the profile data dir; it never touches cookies or
+            # browsing state. If unlock fails (older server version, network
+            # blip), fall through to the original error.
+            if profile_id and "already running" in body:
+                unlock_url = f"{url}/v1/profiles/{profile_id}/unlock"
+                try:
+                    logger.warning(
+                        "BrowseFleet profile %s locked, attempting auto-unlock via %s",
+                        profile_id, unlock_url,
+                    )
+                    async with httpx.AsyncClient(timeout=httpx.Timeout(15.0)) as unlock_client:
+                        unlock_resp = await unlock_client.post(unlock_url, headers=headers)
+                    if unlock_resp.status_code in (200, 201, 404):
+                        # 404 = endpoint doesn't exist on old server; surface original error.
+                        # 200/201 = locks cleared, retry session creation.
+                        if unlock_resp.status_code != 404:
+                            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as retry_client:
+                                resp = await retry_client.post(f"{url}/v1/sessions", json=payload, headers=headers)
+                            if resp.status_code not in (200, 201):
+                                body = resp.text[:500]
+                                raise RuntimeError(
+                                    f"BrowseFleet session creation failed ({resp.status_code}) "
+                                    f"after profile unlock retry: {body}"
+                                )
+                        else:
+                            raise RuntimeError(
+                                f"BrowseFleet session creation failed ({resp.status_code}): {body} "
+                                f"(unlock endpoint not available on server; upgrade BF to ≥1.2.0)"
+                            )
+                    else:
+                        raise RuntimeError(
+                            f"BrowseFleet session creation failed ({resp.status_code}): {body} "
+                            f"(unlock attempt failed: {unlock_resp.status_code})"
+                        )
+                except RuntimeError:
+                    raise
+                except Exception as unlock_exc:
+                    raise RuntimeError(
+                        f"BrowseFleet session creation failed ({resp.status_code}): {body} "
+                        f"(unlock attempt errored: {unlock_exc})"
+                    ) from unlock_exc
+            else:
+                raise RuntimeError(f"BrowseFleet session creation failed ({resp.status_code}): {body}")
 
         try:
             data = resp.json()

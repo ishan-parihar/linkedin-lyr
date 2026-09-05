@@ -59,7 +59,11 @@ _REGISTRY_NAME_TO_DIR_PREFIX = {
 
 # Obscura binary directory
 _OBSCURA_DIR = "obscura"
-_OBSCURA_BINARY_PATH = Path("/tmp/obscura")
+# Was /tmp/obscura — /tmp is wiped on reboot (tmpfs), so a login profile
+# saved there was lost on every VPS restart. Persisted under ~/.local/bin
+# alongside the linkedin-lyr-managed binary (mirrors
+# obscura_binary_manager.DEFAULT_BINARY_PATH).
+_OBSCURA_BINARY_PATH = Path.home() / ".local" / "bin" / "obscura"
 
 # Patchright browser directory
 _BROWSER_DIR = "patchright-browsers"
