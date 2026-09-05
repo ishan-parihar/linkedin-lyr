@@ -89,6 +89,15 @@ SUPPORTED_BROWSERS: dict[str, dict[str, object]] = {
         "win_subpath": "BraveSoftware/Brave-Browser/User Data",
         "chromium_versioned": True,
     },
+    "brave-origin": {
+        "label": "Brave-Origin",
+        "safe_storage": "Brave",
+        "mac_subpath": "BraveSoftware/Brave-Origin",
+        "linux_subpaths": ("BraveSoftware/Brave-Origin",),
+        "linux_app_token": "brave",
+        "win_subpath": "BraveSoftware/Brave-Origin/User Data",
+        "chromium_versioned": True,
+    },
     "edge": {
         "label": "Microsoft Edge",
         "safe_storage": "Microsoft Edge",

@@ -22,8 +22,8 @@ from curl_cffi import requests as cffi_req
 logger = logging.getLogger(__name__)
 
 _VOYAGER_PROBE = (
-    "https://www.linkedin.com/voyager/api/identity/profiles"
-    "?q=memberIdentity&memberIdentity=__probe__"
+    "https://www.linkedin.com/voyager/api/me?decorationId="
+    "com.linkedin.voyager.deco.identity.web.ProfileTopCardDecoration-14"
 )
 _UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -57,8 +57,14 @@ def probe_session(cookies: dict[str, str], timeout: float = 10.0) -> ProbeVerdic
         headers["csrf-token"] = token
 
     try:
-        with cffi_req.Client(impersonate="chrome", timeout=timeout, allow_redirects=False) as client:
-            resp = client.get(_VOYAGER_PROBE, headers=headers, cookies=cookies)
+        resp = cffi_req.get(
+            _VOYAGER_PROBE,
+            headers=headers,
+            cookies=cookies,
+            impersonate="chrome",
+            timeout=timeout,
+            allow_redirects=False,
+        )
     except Exception as exc:  # network blip -> treat as dead, not alive
         logger.debug("voyager probe error: %s", exc)
         return "dead"

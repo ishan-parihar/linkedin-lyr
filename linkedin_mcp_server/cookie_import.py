@@ -76,6 +76,20 @@ BROWSER_REGISTRY: dict[str, BrowserProfile] = {
         ],
         cdp_process_pattern="brave.*remote-debugging",
     ),
+    "brave-origin": BrowserProfile(
+        name="Brave-Origin",
+        engine="chromium",
+        description="Brave-based fork (Omarchy hosts browser at Brave-Origin)",
+        cookie_db_paths=["Default/Cookies", "Profile */Cookies"],
+        profile_dir_paths=[
+            ".config/BraveSoftware/Brave-Origin",
+        ],
+        executable_paths=[
+            "/usr/bin/brave",
+            "/usr/bin/brave-browser",
+        ],
+        cdp_process_pattern="brave.*remote-debugging",
+    ),
     "zen": BrowserProfile(
         name="Zen Browser",
         engine="firefox",
