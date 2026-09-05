@@ -153,6 +153,21 @@ async def _get_extractor_for_tool():
                 "No li_at cookie found. Run 'linkedin-lyr --login' to re-authenticate.",
             )
 
+        # Voyager pre-flight gate (HI-RG-056): fail fast on a dead session
+        # BEFORE booting a browser. A dead session makes every navigation land
+        # on the LinkedIn authwall, where selector waits hang until the hard
+        # timeout — and each browser boot can rotate session state server-side.
+        from linkedin_mcp_server.voyager_auth import probe_session
+
+        probe_verdict = probe_session(cookies_dict)
+        if probe_verdict != "alive":
+            axi_error(
+                f"LinkedIn session probe returned {probe_verdict.upper()} (Voyager pre-flight gate)",
+                "The li_at cookie is expired or invalid. Re-authenticate with "
+                "'linkedin-lyr --login', or refresh cookies via "
+                "'linkedin-lyr --import-from-browser' / the BF login proxy.",
+            )
+
         # Use the main profile directory for stability
         temp_profile = str(Path.home() / ".linkedin-lyr" / "profile")
 
