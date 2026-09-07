@@ -176,7 +176,14 @@ def _probe_via_bf(
     req = urllib.request.Request(
         endpoint,
         data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json", "x-api-key": token},
+        headers={
+            "Content-Type": "application/json",
+            "x-api-key": token,
+            # Cloudflare in front of the fleet 403s the default
+            # "Python-urllib/x.y" UA, which made every relayed probe look like
+            # a relay failure (unknown) even when the fleet was fine.
+            "User-Agent": _probe_user_agent(),
+        },
         method="POST",
     )
     try:
