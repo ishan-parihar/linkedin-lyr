@@ -4,6 +4,7 @@ LinkedIn-specific ObscuraCookieManager integration.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Optional
 
@@ -13,13 +14,62 @@ from obscura_core import (
     LinkedInCookieExtractor,
     CookieValidationResult,
 )
+from obscura_core.cookie_manager.exceptions import CookieStorageError
 
+from linkedin_mcp_server.common_utils import utcnow_iso
 from linkedin_mcp_server.session_state import portable_cookie_path
 
 logger = logging.getLogger(__name__)
 
 # Required cookies for LinkedIn
 LINKEDIN_REQUIRED_COOKIES = ["li_at"]
+
+
+class _QuarantiningFileCookieStorage(FileCookieStorage):
+    """FileCookieStorage that never destroys the cookie file (#2593).
+
+    obscura_core's ObscuraCookieManager calls ``storage.clear()`` on
+    invalidation; the base class unlinks cookies.json outright, so one
+    false-negative validation left the runtime with no session at all — the
+    destruction step of the relogin loop. Here "clear" quarantines the file
+    beside itself under the session_state quarantine naming (recoverable by
+    hand, swept by ``clear_auth_state``), and a failed quarantine refuses to
+    destroy anything.
+
+    ``load`` also accepts the canonical list-of-dicts shape the rest of the
+    system writes, which the base class silently reads as None and treated as
+    "no session", triggering the re-extract/invalidate cascade on a perfectly
+    good file.
+    """
+
+    async def load(self) -> Optional[dict[str, str]]:
+        if not self.file_path.exists():
+            return None
+        try:
+            from linkedin_mcp_server.voyager_auth import normalize_cookies
+
+            data = json.loads(self.file_path.read_text())
+        except (json.JSONDecodeError, OSError) as exc:
+            raise CookieStorageError(
+                f"Failed to load cookies from {self.file_path}: {exc}"
+            ) from exc
+        return normalize_cookies(data)
+
+    async def clear(self) -> None:
+        if not self.file_path.exists():
+            return
+        stamp = utcnow_iso().replace(":", "-")
+        backup = self.file_path.parent / f"invalid-state-{stamp}-cookies.json"
+        try:
+            self.file_path.replace(backup)
+        except OSError as exc:
+            logger.error(
+                "Could not quarantine cookies to %s: %s; leaving the file in place",
+                backup,
+                exc,
+            )
+            return
+        logger.warning("Quarantined cookies to %s (not deleted)", backup)
 
 
 class LinkedInCookieValidator:
@@ -34,6 +84,11 @@ class LinkedInCookieValidator:
         Bringing stored cookies into a headless browser is what triggers
         LinkedIn's server-side rotation (#2329), so liveness is decided with a
         plain HTTP probe and the automated browser is never booted here.
+
+        An ``unknown`` probe outcome (network blip, fleet relay down, LinkedIn
+        5xx) validates the session: the probe could not ask LinkedIn the
+        question, so it has no evidence the session died. Returning False here
+        is what sent live sessions into the invalidation loop (#2593).
         """
         try:
             # Fast fail: check that required cookies are present
@@ -46,9 +101,14 @@ class LinkedInCookieValidator:
             from linkedin_mcp_server.voyager_auth import aprobe_session
 
             verdict = await aprobe_session(cookies)
-            if verdict != "alive":
-                logger.debug(f"Voyager probe rejected session: {verdict}")
+            if verdict == "dead":
+                logger.debug("Voyager probe rejected session: dead")
                 return False
+            if verdict == "unknown":
+                logger.warning(
+                    "Voyager probe could not reach LinkedIn (unknown); "
+                    "treating the session as valid rather than invalidating it"
+                )
             return True
         except Exception as e:
             logger.debug(f"LinkedIn cookie validation failed: {e}")
@@ -63,8 +123,8 @@ class LinkedInObscuraManager:
         self._validator = LinkedInCookieValidator()
 
     def _get_storage(self) -> FileCookieStorage:
-        """Get file-based cookie storage."""
-        return FileCookieStorage(portable_cookie_path())
+        """Get file-based cookie storage (non-destructive, format-tolerant)."""
+        return _QuarantiningFileCookieStorage(portable_cookie_path())
 
     def _get_extractor(self) -> LinkedInCookieExtractor:
         """Get browser cookie extractor (prefers Chrome/Arc)."""

@@ -33,6 +33,7 @@ from linkedin_mcp_server.exceptions import (
     BrowserSetupFailedError,
     BrowserSetupInProgressError,
     DockerHostLoginRequiredError,
+    LinkedInMCPError,
 )
 from linkedin_mcp_server.session_state import (
     auth_root_dir,
@@ -594,6 +595,16 @@ async def ensure_tool_ready_or_raise(tool_name: str, ctx: Context | None = None)
     await _start_login_if_needed(ctx)
 
 
+def _load_stored_cookies() -> dict[str, str]:
+    """Flat dict of the stored portable cookies; empty when absent/unreadable."""
+    from linkedin_mcp_server.voyager_auth import normalize_cookies
+
+    try:
+        return normalize_cookies(json.loads(portable_cookie_path().read_text()))
+    except Exception:  # noqa: BLE001 - absence is the common no-session case
+        return {}
+
+
 def _raise_if_docker_auth_missing() -> None:
     if _auth_ready():
         return
@@ -929,6 +940,31 @@ async def invalidate_auth_and_trigger_relogin(
                 "already in progress in a browser window. Complete login there, "
                 "then retry this tool."
             )
+
+        # Confirm before destroying (#2593): the caller's AuthenticationError
+        # can come from a page-level checkpoint, a selector timeout, or a probe
+        # that could not reach LinkedIn — none of which is proof the stored
+        # session is dead. Quarantining cookies over anything less is what
+        # turned one bad probe into the relogin loop. Only a confirmed-dead
+        # verdict (or no stored cookies at all) authorizes the force-move.
+        stored = _load_stored_cookies()
+        if stored.get("li_at"):
+            from linkedin_mcp_server.voyager_auth import aprobe_session
+
+            verdict = await aprobe_session(stored)
+            if verdict != "dead":
+                logger.warning(
+                    "Re-login refused: stored session probes %s, not dead; "
+                    "keeping the stored cookies",
+                    verdict,
+                )
+                raise LinkedInMCPError(
+                    f"Stored LinkedIn session still probes {verdict.upper()}; "
+                    "refusing to invalidate it. The failure was likely transient "
+                    "(authwall, rate limit, or probe outage) — retry the tool "
+                    "call. To force a fresh login regardless, run "
+                    "'linkedin-lyr --login'."
+                )
 
         # Force-move stale profile files (skip _auth_ready() guard).
         _force_move_auth_state_aside()

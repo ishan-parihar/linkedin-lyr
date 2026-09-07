@@ -11,7 +11,7 @@
 | Step | Result |
 |------|--------|
 | **Tunnel** | `~/.cloudflared/main.yml` already had `browsefleet.ishanparihar.com → http://localhost:3000`, `cloudflared-tunnel@main` active |
-| **.env** | Fixed duplicate `API_KEYS`, set `API_KEYS=49f7c273...,60b401...,89fb31...`, `CDP_EXTERNAL_HOST=browsefleet.ishanparihar.com:443/wss`, `STEALTH_DEFAULT=full`, `MAX_CONCURRENT_SESSIONS=30` |
+| **.env** | Fixed duplicate `API_KEYS`, set `API_KEYS=<token1>,<token2>,<token3>` (rotated 2026-09 after a leaked copy was found in this doc — never commit fleet tokens), `CDP_EXTERNAL_HOST=browsefleet.ishanparihar.com:443/wss`, `STEALTH_DEFAULT=full`, `MAX_CONCURRENT_SESSIONS=30` |
 | **Docker** | `docker compose build` 35s, `up -d` → `browsefleet-browsefleet-1` healthy on `127.0.0.1:3000`, `GET /health` → `{"status":"ok","version":"1.1.0"}` locally and via `https://browsefleet.ishanparihar.com/health` |
 | **VPS bf CLI** | Fixed `~/.browsefleet.env` (`BROWSEFLEET_URL`+`TOKEN`+`CDP_URL`), `bf health`/`bf sessions` now work from `hermes-vps` |
 | **Local resources** | 46 GB RAM, 24 vCPU — fits 10 sessions (2–5 GB). RackNerd 2.4 GB stays thin-client only |
@@ -116,7 +116,7 @@ On `hermes-vps`, `~/.linkedin-lyr/bf.env` (sourced by `common_utils.load_proxy_e
 ```
 LINKEDIN_BROWSER_BACKEND=browsefleet
 BROWSEFLEET_URL=https://browsefleet.ishanparihar.com
-BROWSEFLEET_TOKEN=49f7c273ef86c3e7d108f1aa72682bc0
+BROWSEFLEET_TOKEN=<token>  # from bf.env / BROWSEFLEET_TOKEN — never commit the real value
 BROWSEFLEET_PROFILE_ID=linkedin-ishan
 ```
 
@@ -150,7 +150,7 @@ BROWSEFLEET_PROFILE_ID=linkedin-ishan
 
 ```bash
 # Fleet health (local or VPS)
-curl -H "x-api-key: 49f7c273ef86c3e7d108f1aa72682bc0" https://browsefleet.ishanparihar.com/health
+curl -H "x-api-key: $BROWSEFLEET_TOKEN" https://browsefleet.ishanparihar.com/health
 bf sessions   # via hermes-vps (uses ~/.browsefleet.env)
 
 # Plugin dev (local)

@@ -272,6 +272,90 @@ class TestInvalidateAuthAndTriggerRelogin:
         assert not source_state_path(isolate_profile_dir).exists()
 
 
+class TestInvalidateConfirmationGate:
+    """Invalidation only destroys on a confirmed-dead probe verdict (#2593).
+
+    Quarantining cookies over an alive or unverifiable session is what turned
+    one bad probe into the infinite relogin loop; the gate must refuse.
+    """
+
+    @staticmethod
+    def _write_valued_cookies(profile_dir):
+        cookie_path = portable_cookie_path(profile_dir)
+        cookie_path.parent.mkdir(parents=True, exist_ok=True)
+        cookie_path.write_text(
+            json.dumps(
+                [{"name": "li_at", "value": "AQED-x", "domain": ".linkedin.com"}]
+            )
+        )
+        return cookie_path
+
+    async def test_refuses_to_quarantine_alive_session(
+        self, isolate_profile_dir, monkeypatch
+    ):
+        self._write_valued_cookies(isolate_profile_dir)
+        initialize_bootstrap("managed")
+
+        async def alive(cookies, timeout=10.0, attempts=None):
+            return "alive"
+
+        monkeypatch.setattr(
+            "linkedin_mcp_server.voyager_auth.aprobe_session", alive
+        )
+
+        with pytest.raises(LinkedInMCPError, match="refusing to invalidate"):
+            await invalidate_auth_and_trigger_relogin()
+
+        # Nothing was moved and no login started.
+        assert portable_cookie_path(isolate_profile_dir).exists()
+        assert get_bootstrap_state().login_task is None
+
+    async def test_refuses_to_quarantine_unverifiable_session(
+        self, isolate_profile_dir, monkeypatch
+    ):
+        self._write_valued_cookies(isolate_profile_dir)
+        initialize_bootstrap("managed")
+
+        async def unknown(cookies, timeout=10.0, attempts=None):
+            return "unknown"
+
+        monkeypatch.setattr(
+            "linkedin_mcp_server.voyager_auth.aprobe_session", unknown
+        )
+
+        with pytest.raises(LinkedInMCPError, match="refusing to invalidate"):
+            await invalidate_auth_and_trigger_relogin()
+
+        assert portable_cookie_path(isolate_profile_dir).exists()
+        assert get_bootstrap_state().login_task is None
+
+    async def test_quarantines_confirmed_dead_session(
+        self, isolate_profile_dir, monkeypatch
+    ):
+        self._write_valued_cookies(isolate_profile_dir)
+        initialize_bootstrap("managed")
+
+        async def dead(cookies, timeout=10.0, attempts=None):
+            return "dead"
+
+        monkeypatch.setattr(
+            "linkedin_mcp_server.voyager_auth.aprobe_session", dead
+        )
+
+        async def fake_login_flow():
+            return None
+
+        monkeypatch.setattr(
+            "linkedin_mcp_server.bootstrap._run_login_flow", fake_login_flow
+        )
+
+        with pytest.raises(AuthenticationStartedError, match="Session expired"):
+            await invalidate_auth_and_trigger_relogin()
+
+        assert not portable_cookie_path(isolate_profile_dir).exists()
+        assert get_bootstrap_state().login_task is not None
+
+
 _DEFAULT_TARGETS = {
     "chromium-": "1217",
     "chromium_headless_shell-": "1217",

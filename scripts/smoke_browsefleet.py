@@ -26,7 +26,9 @@ import sys
 from pathlib import Path
 
 BF_URL = "https://browsefleet.ishanparihar.com"
-BF_TOKEN = "49f7c273ef86c3e7d108f1aa72682bc0"
+# Never hard-code the fleet token: it was committed once and had to be
+# rotated (#2593). Source it from the environment / bf.env instead.
+BF_TOKEN = os.environ.get("BROWSEFLEET_TOKEN", "").strip()
 BF_LOCAL = "http://localhost:3000"
 
 

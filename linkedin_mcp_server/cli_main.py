@@ -271,9 +271,13 @@ def export_session_and_exit() -> None:
     from linkedin_mcp_server.voyager_auth import probe_session
 
     verdict = probe_session(cookies)
-    if verdict != "alive":
-        print(_toon_kv("error", f"Current session is not alive ({verdict})"))
+    if verdict == "dead":
+        print(_toon_kv("error", "Current session is dead (Voyager probe)"))
         print(_toon_kv("help", "Run `linkedin-lyr --login` or `--import-from-browser` first"))
+        sys.exit(1)
+    if verdict == "unknown":
+        print(_toon_kv("error", "Session liveness could not be verified (probe unreachable)"))
+        print(_toon_kv("help", "Retry when the network / BrowseFleet relay is back; the stored session was not modified"))
         sys.exit(1)
 
     export_path = Path(config.server.export_session).expanduser()
@@ -324,9 +328,13 @@ def import_session_and_exit() -> None:
     from linkedin_mcp_server.voyager_auth import probe_session
 
     verdict = probe_session(cookies)
-    if verdict != "alive":
-        print(_toon_kv("error", f"Imported session failed probe ({verdict})"))
+    if verdict == "dead":
+        print(_toon_kv("error", "Imported session was rejected by LinkedIn (Voyager probe: dead)"))
         print(_toon_kv("help", "Export a live session from the source host and retry"))
+        sys.exit(1)
+    if verdict == "unknown":
+        print(_toon_kv("error", "Imported session could not be verified (probe unreachable)"))
+        print(_toon_kv("help", "Retry when the network / BrowseFleet relay is back; nothing was imported"))
         sys.exit(1)
 
     # Canonical on-disk persistence is the list-of-dicts shape the rest of the

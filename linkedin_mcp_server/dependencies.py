@@ -1,6 +1,7 @@
 """Helpers used by MCP tools after bootstrap gating."""
 
 import asyncio
+import json
 import logging
 from typing import NoReturn
 
@@ -26,9 +27,6 @@ from linkedin_mcp_server.exceptions import (
 )
 from linkedin_mcp_server.obscura_integration import (
     CookieValidationResult,
-    get_valid_linkedin_cookies,
-    force_linkedin_cookie_refresh,
-    invalidate_linkedin_auth,
 )
 from linkedin_mcp_server.session_pool import list_sessions
 from linkedin_mcp_server.voyager_auth import probe_session
@@ -78,12 +76,43 @@ async def handle_auth_error(
             "then retry this tool."
         ) from error
 
+    # Confirm before destroying (#2593): an AuthenticationError raised by a
+    # page-level check can be a checkpoint, a selector timeout, or a probe
+    # false-negative — none of which is proof the stored cookies died. If the
+    # stored session still probes alive (or the probe could not reach
+    # LinkedIn), keep the cookies and surface the original error honestly;
+    # the destructive relogin only runs on a confirmed-dead verdict.
+    from linkedin_mcp_server.session_state import portable_cookie_path
+    from linkedin_mcp_server.voyager_auth import normalize_cookies, probe_session
+
+    stored: dict[str, str] = {}
+    try:
+        stored = normalize_cookies(json.loads(portable_cookie_path().read_text()))
+    except Exception:  # noqa: BLE001 - nothing stored means nothing to protect
+        stored = {}
+    if stored.get("li_at"):
+        verdict = await asyncio.to_thread(probe_session, stored)
+        if verdict != "dead":
+            logger.warning(
+                "Re-login refused: stored session probes %s, not dead; "
+                "keeping the stored cookies",
+                verdict,
+            )
+            raise error
+
     logger.warning("Stale session detected; closing browser and triggering re-login")
     try:
         await close_browser()
     except Exception as close_exc:
         logger.warning("Failed to close stale browser (ignored): %s", close_exc)
-    await invalidate_linkedin_auth()  # always raises
+    # Bootstrap's relogin flow — NOT obscura_core's invalidate_linkedin_auth.
+    # The obscura manager's invalidation deletes cookies.json outright
+    # (FileCookieStorage.clear) and raises a raw ReLoginRequiredError without
+    # starting any login, so the caller's `except Exception` turned every
+    # later tool call into the same error: cookies gone, no login ever opened,
+    # the relogin loop (#2593). invalidate_auth_and_trigger_relogin quarantines
+    # the artifacts (recoverable) and actually opens the login browser.
+    await invalidate_auth_and_trigger_relogin(ctx)  # always raises
 
 
 async def _first_live_pool_session() -> dict[str, str] | None:

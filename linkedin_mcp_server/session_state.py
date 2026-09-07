@@ -315,12 +315,24 @@ def _auth_state_targets(profile_dir: Path) -> list[Path]:
     ]
 
 
-def quarantine_dirs(source_profile_dir: Path | None = None) -> list[Path]:
-    """Existing quarantine directories, newest name last."""
+def quarantine_paths(source_profile_dir: Path | None = None) -> list[Path]:
+    """Existing quarantine directories and files, newest name last.
+
+    Directories come from whole-session rotations; files (``*-cookies.json``)
+    from the non-destructive cookie-storage clear, which quarantines the
+    portable file instead of deleting it (#2593).
+    """
     root = auth_root_dir(source_profile_dir)
     if not root.is_dir():
         return []
-    return sorted(path for path in root.glob(f"{QUARANTINE_PREFIX}*") if path.is_dir())
+    return sorted(
+        path for path in root.glob(f"{QUARANTINE_PREFIX}*") if path.is_dir() or path.is_file()
+    )
+
+
+def quarantine_dirs(source_profile_dir: Path | None = None) -> list[Path]:
+    """Existing quarantine *directories*, newest name last (compat wrapper)."""
+    return [path for path in quarantine_paths(source_profile_dir) if path.is_dir()]
 
 
 async def run_deferring_cancels(
@@ -650,7 +662,7 @@ def clear_auth_state(source_profile_dir: Path | None = None) -> bool:
         # Quarantines hold previous sessions' cookies, so a logout that left them
         # behind would not be the "clear all stored auth state" the CLI
         # advertises.
-        targets = _auth_state_targets(profile_dir) + quarantine_dirs(profile_dir)
+        targets = _auth_state_targets(profile_dir) + quarantine_paths(profile_dir)
 
         success = True
         for target in targets:

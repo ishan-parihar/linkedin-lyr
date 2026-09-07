@@ -125,26 +125,16 @@ async def _get_extractor_for_tool():
         # Initialize bootstrap environment
         initialize_bootstrap()
 
-        # Read cookies directly from portable cookie path
+        # Read cookies directly from portable cookie path. normalize_cookies
+        # accepts every shape seen on disk (canonical list, single-wrap export,
+        # {"cookies": {...}} wrap, flat dict — cookies_bc3.json) so a stray
+        # backup file can never parse to an empty jar (#2593).
+        from linkedin_mcp_server.voyager_auth import normalize_cookies, probe_session
+
         cookie_path = portable_cookie_path()
         with open(cookie_path) as f:
             cookies_data = json.load(f)
-
-        # Handle both dict format and list format
-        if isinstance(cookies_data, dict):
-            if "cookies" in cookies_data:
-                # Check if cookies is a dict (name: value) or list (cookie objects)
-                if isinstance(cookies_data["cookies"], dict):
-                    cookies_dict = cookies_data["cookies"]
-                else:
-                    cookies_dict = {c["name"]: c["value"] for c in cookies_data["cookies"]}
-            else:
-                # Already in dict format
-                cookies_dict = cookies_data
-        elif isinstance(cookies_data, list):
-            cookies_dict = {c["name"]: c["value"] for c in cookies_data}
-        else:
-            cookies_dict = cookies_data
+        cookies_dict = normalize_cookies(cookies_data)
 
         # Check if required cookies are present
         if "li_at" not in cookies_dict:
@@ -153,19 +143,29 @@ async def _get_extractor_for_tool():
                 "No li_at cookie found. Run 'linkedin-lyr --login' to re-authenticate.",
             )
 
-        # Voyager pre-flight gate (HI-RG-056): fail fast on a dead session
-        # BEFORE booting a browser. A dead session makes every navigation land
-        # on the LinkedIn authwall, where selector waits hang until the hard
-        # timeout — and each browser boot can rotate session state server-side.
-        from linkedin_mcp_server.voyager_auth import probe_session
-
+        # Voyager pre-flight gate (HI-RG-056): fail fast on a *confirmed-dead*
+        # session BEFORE booting a browser. A dead session makes every
+        # navigation land on the LinkedIn authwall, where selector waits hang
+        # until the hard timeout — and each browser boot can rotate session
+        # state server-side.
+        #
+        # An ``unknown`` verdict (network blip, fleet relay down, LinkedIn 5xx)
+        # is NOT a dead session: the probe could not ask LinkedIn the question.
+        # Blocking the tool call on it, let alone invalidating cookies over it,
+        # is how the relogin loop fired on live sessions (#2593). Degrade to a
+        # warning and let the scrape itself prove the session either way.
         probe_verdict = probe_session(cookies_dict)
-        if probe_verdict != "alive":
+        if probe_verdict == "dead":
             axi_error(
-                f"LinkedIn session probe returned {probe_verdict.upper()} (Voyager pre-flight gate)",
+                "LinkedIn session probe returned DEAD (Voyager pre-flight gate)",
                 "The li_at cookie is expired or invalid. Re-authenticate with "
                 "'linkedin-lyr --login', or refresh cookies via "
                 "'linkedin-lyr --import-from-browser' / the BF login proxy.",
+            )
+        elif probe_verdict == "unknown":
+            logger.warning(
+                "Voyager pre-flight probe could not reach LinkedIn (unknown); "
+                "continuing — the scrape itself will prove the session"
             )
 
         # Use the main profile directory for stability
