@@ -239,6 +239,24 @@ class BrowseFleetBrowserManager:
                 cookies = {}
                 logger.warning("No cookies found from Brave or portable file")
 
+        # #2593: a dead jar injected over a persisted BF profile poisons the
+        # one session that may still be alive — the split brain that kept
+        # re-revoking li_at. Only inject a jar that probes alive; otherwise let
+        # the profileId's persisted session serve (and surface an honest
+        # login error if it has none).
+        if cookies and profile_id:
+            from linkedin_mcp_server.voyager_auth import probe_session
+
+            verdict = probe_session(cookies)
+            if verdict != "alive":
+                logger.warning(
+                    "Skipping cookie injection (probe verdict %s): using the "
+                    "persisted BrowseFleet profile session for %s instead",
+                    verdict,
+                    profile_id,
+                )
+                cookies = {}
+
         self._cookies = cookies
         self._is_authenticated = _REQUIRED_COOKIES.issubset(cookies.keys())
 
