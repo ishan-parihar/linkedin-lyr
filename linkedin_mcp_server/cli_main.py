@@ -126,8 +126,6 @@ def clear_profile_and_exit() -> None:
     version = get_version()
     logger.info(f"LinkedIn MCP Server v{version} - Profile Clear mode")
 
-    auth_root = get_profile_dir().parent
-
     if not (
         profile_exists(get_profile_dir())
         or portable_cookie_path(get_profile_dir()).exists()

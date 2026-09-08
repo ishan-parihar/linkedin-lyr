@@ -115,6 +115,41 @@ def _synthesize_ua() -> str | None:
     return None
 
 
+def _injection_enabled() -> bool:
+    """Cookie injection is opt-in (#2601b): cross-context replay burns jars.
+
+    The jar minted in the user's browser is context-bound to that browser +
+    egress. Injecting it into the fleet browser (different machine + IP)
+    makes LinkedIn challenge the replay and revoke the replayed copy (302 →
+    /hp loop + ``li_at=delete me``), while the source browser's session
+    survives. Default path is the persisted BF profile session (native
+    operatorMode login); set ``LINKEDIN_BF_INJECT_COOKIES=1`` only for a
+    deliberate migration, accepting that the jar will be burned for the
+    fleet context.
+    """
+    return os.environ.get("LINKEDIN_BF_INJECT_COOKIES", "").strip() == "1"
+
+
+def _source_state_ua() -> str | None:
+    """The UA the stored jar was minted under (source-state.json).
+
+    #2601 fingerprint consistency: on hosts without the source browser (the
+    VPS), synthesis returns nothing and the session would run under a fleet
+    default UA — a mismatch LinkedIn can score. The mint-time UA recorded at
+    import/login is the correct replay fingerprint.
+    """
+    try:
+        from linkedin_mcp_server.session_state import source_state_path
+
+        data = json.loads(source_state_path().read_text())
+    except Exception:  # noqa: BLE001 - a missing/unreadable state file is fine
+        return None
+    user_agent = data.get("user_agent") if isinstance(data, dict) else None
+    if isinstance(user_agent, str) and user_agent.strip():
+        return user_agent.strip()
+    return None
+
+
 def _extract_browser_cookies() -> dict[str, str]:
     """Try to extract cookies from the local browser (Brave-Origin etc)."""
     try:
@@ -200,36 +235,49 @@ class BrowseFleetBrowserManager:
             )
         url = url.rstrip("/")
 
-        # Resolve cookies: live Brave extraction is preferred (freshest li_at),
-        # portable file is fallback. #2601: never HTTP-probe these jars —
-        # replaying browser-minted cookies over HTTP is itself a revocation
-        # trigger. When both jars exist and differ, prefer the freshest
-        # extraction (the browser the user actually uses) and let the fleet
-        # browser prove liveness; a dead jar in the browser is recoverable
-        # (re-import), a burned jar is not.
-        portable = _load_portable_cookies()
-        extracted = _extract_browser_cookies()
+        # Resolve cookies ONLY when injection is explicitly requested.
+        # #2601b (2026-09-08, proven live): replaying a browser-minted jar
+        # into the fleet browser — a different machine and egress — triggers
+        # LinkedIn's challenge loop (302 → /hp → … + ``li_at=delete me`` on
+        # the replayed copy). The jar that works in Brave is burned for the
+        # fleet context while Brave's own session survives. Cross-context
+        # injection is therefore OPT-IN (a deliberate session migration), and
+        # the default path is the persisted BF profile session — minted by a
+        # native operatorMode login inside the fleet browser itself, which is
+        # the only context that never gets challenged.
+        portable: dict[str, str] = {}
+        extracted: dict[str, str] = {}
         cookies: dict[str, str] = {}
-        if extracted and "li_at" in extracted:
-            if portable and "li_at" in portable and portable["li_at"] != extracted["li_at"]:
-                cookies = extracted
-                logger.info(
-                    "Using %d cookies from live Brave (fresher than portable file; no HTTP probe)",
-                    len(cookies),
-                )
+        if _injection_enabled():
+            portable = _load_portable_cookies()
+            extracted = _extract_browser_cookies()
+            if extracted and "li_at" in extracted:
+                if portable and "li_at" in portable and portable["li_at"] != extracted["li_at"]:
+                    cookies = extracted
+                    logger.info(
+                        "Using %d cookies from live Brave (fresher than portable file; no HTTP probe)",
+                        len(cookies),
+                    )
+                else:
+                    cookies = extracted
+                    logger.info("Using %d cookies extracted from local browser", len(cookies))
+            elif portable and "li_at" in portable:
+                cookies = portable
+                logger.info("Using %d cookies from portable file", len(cookies))
             else:
-                cookies = extracted
-                logger.info("Using %d cookies extracted from local browser", len(cookies))
-        elif portable and "li_at" in portable:
-            cookies = portable
-            logger.info("Using %d cookies from portable file", len(cookies))
+                cookies = extracted or portable
+                if cookies:
+                    logger.info("Using %d cookies (fallback)", len(cookies))
+                else:
+                    cookies = {}
+                    logger.warning("No cookies found from Brave or portable file")
         else:
-            cookies = extracted or portable
-            if cookies:
-                logger.info("Using %d cookies (fallback)", len(cookies))
-            else:
-                cookies = {}
-                logger.warning("No cookies found from Brave or portable file")
+            logger.info(
+                "Cookie injection disabled (default; cross-context replay burns "
+                "browser-minted jars) — using the persisted BrowseFleet profile "
+                "session. Set LINKEDIN_BF_INJECT_COOKIES=1 only for a deliberate "
+                "session migration."
+            )
 
         # #2593/#2601: never let a structurally-broken jar poison a persisted
         # BF profile session, but do NOT gate on an HTTP probe (it burns
@@ -256,9 +304,11 @@ class BrowseFleetBrowserManager:
                 if cfg_ua:
                     self.user_agent = cfg_ua
                 else:
-                    self.user_agent = _synthesize_ua()
+                    # Mint-time UA first (exact replay fingerprint), then
+                    # synthesis for fresh-logins-without-state.
+                    self.user_agent = _source_state_ua() or _synthesize_ua()
             except Exception:
-                self.user_agent = _synthesize_ua()
+                self.user_agent = _source_state_ua() or _synthesize_ua()
 
         # Build CreateSessionRequest
         payload: dict[str, Any] = {
@@ -285,7 +335,12 @@ class BrowseFleetBrowserManager:
                 proxy = proxy["server"]
             payload["proxyUrl"] = str(proxy)
 
-        if self.user_agent:
+        # #2601 fingerprint consistency: only pin a UA when we are actually
+        # injecting cookies (the jar was minted under this UA). On the
+        # persisted-profile path (no injection) the profile already carries
+        # the fingerprint its session was minted under — overriding it is
+        # exactly the mismatch signal LinkedIn scores.
+        if cookies and self.user_agent:
             payload["userAgent"] = self.user_agent
 
         headers: dict[str, str] = {"Content-Type": "application/json"}
@@ -444,9 +499,13 @@ class BrowseFleetBrowserManager:
         if contexts:
             self._playwright_context = contexts[0]
         else:
+            # Mirror the payload rule: pin UA only when cookies are injected;
+            # otherwise inherit the profile/fleet default fingerprint.
+            ctx_kwargs: dict[str, Any] = {"viewport": self.viewport}
+            if cookies and self.user_agent:
+                ctx_kwargs["user_agent"] = self.user_agent
             self._playwright_context = await self._playwright_browser.new_context(
-                viewport=self.viewport,
-                user_agent=self.user_agent,
+                **ctx_kwargs
             )
 
         self._playwright_page = await self._playwright_context.new_page()

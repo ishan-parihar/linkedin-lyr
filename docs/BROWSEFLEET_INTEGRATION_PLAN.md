@@ -172,7 +172,7 @@ hermes-vps 'BROWSEFLEET_PROFILE_ID=... linkedin-lyr get_my_profile 2>&1 | head -
 | **Cloudflare tunnel** (`~/.config/systemd/user/browsefleet-tunnel.service`) | ✓ | 4 QUIC connections, user systemd, auto-restart on failure. Fixed `credentials-file: ~/.cloudflared/...json` (was `/etc/cloudflared/...` 0600 unreadable by `cloudflared` user) |
 | **Public session create + WSS connect** | ✓ | `wss://browsefleet.ishanparihar.com/cdp/<id>?apiKey=...` returns and Playwright `connect_over_cdp` succeeds. 3-step fallback: fleet URL → ws://localhost:3000 → local fallback |
 | **Brave-Origin cookie extraction** | ✓ | 15 cookies (li_at, JSESSIONID, bcookie, bscookie, dfpfpt, fptctx2, g_state, lang, li_theme, li_theme_set, liap, lidc, sdui_ver, timezone, PLAY_SESSION) |
-| **Cookie priority (live vs portable)** | ✓ | Probes both with `voyager_auth.probe_session`; prefers alive, falls back to freshest when both stale |
+| **Cookie priority (live vs portable)** | ✓ (superseded by #2601/#2601b) | Probe-based selection removed; injection now opt-in (`LINKEDIN_BF_INJECT_COOKIES=1`), profile session is the default |
 | **Test suite** `tests/test_browsefleet_browser.py` | ✓ | 13/13 pass (backend selection, config validation, manager init, CDP token-injection, env loading) |
 | **Lint** `uv run ruff check .` | ✓ | Clean |
 | **Smoke test** `scripts/smoke_browsefleet.py` | ✓ 3/4 | Fleet / Tunnel / Cookies pass; LinkedIn content depends on a live session (see below) |
@@ -201,6 +201,32 @@ Consequences now enforced in code:
   session and that is surfaced honestly when they fail.
 - The legacy `browser_cookie3` CLI import path is replaced by the orchestrator
   (in-browser validation, UA pinning).
+
+### #2601b (2026-09-09): Cross-context jar injection is *also* a revocation trigger
+
+Proven live on 2026-09-09: injecting a Brave-minted `li_at` into a **fleet
+browser on a different machine + datacenter IP** produced the full burn
+signature in-browser — `302` + `Set-Cookie: li_at=delete me` +
+`clearSiteData: storage` — even though the jar had never been HTTP-probed and
+still worked in Brave. LinkedIn scores a login-context switch (machine,
+fingerprint, IP) as session theft and revokes the *replayed copy* (the source
+Brave session survived this time; the earlier HTTP-replay burn propagated).
+Worse, the burned replayed cookies were **written into the persisted BF
+profile's storage**, poisoning the profile so even profile-only sessions
+bounced in a redirect loop.
+
+Consequences now enforced in code:
+
+- **Cookie injection into fleet sessions is default-OFF.** The default path is
+  the persisted profile's own session (fleet-native login via `operatorMode`
+  viewer, once per profile). Opt-in via `LINKEDIN_BF_INJECT_COOKIES=1` for
+  deliberate same-machine migrations only.
+- `userAgent` is only sent when cookies are injected; the profile's own
+  fingerprint is never overridden on the profile-only path. When injection is
+  on, UA priority is config → mint-time pinned UA (`source-state.json`) →
+  synthesis.
+- A poisoned profile cannot self-heal: delete + recreate the profile and do the
+  one native login (`operatorMode` + `viewerUrl`).
 
 ### Production setup checklist for a new install
 
