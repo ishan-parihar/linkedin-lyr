@@ -178,6 +178,30 @@ hermes-vps 'BROWSEFLEET_PROFILE_ID=... linkedin-lyr get_my_profile 2>&1 | head -
 | **Smoke test** `scripts/smoke_browsefleet.py` | ✓ 3/4 | Fleet / Tunnel / Cookies pass; LinkedIn content depends on a live session (see below) |
 | **Brave cookie replay to LinkedIn** | ✗ (expected) | LinkedIn's JA3/TLS fingerprint differs on CloakBrowser vs Brave → redirect loop, `probe_session` returns `dead`. The smoke fails on [4] because the `li_at AQEDARtoEt0AdOso...` was already server-side revoked by prior replay attempts. Re-login natively required once (see P3 of the plan, "operatorMode" + `viewerUrl`). |
 
+### #2601 (2026-09-08): HTTP replay is the revocation trigger itself
+
+The row above understated the mechanism. Proven live on 2026-09-08: a jar
+validated **in a real Chromium** at 09:51 was revoked minutes later by the
+first out-of-band HTTP probe (direct `curl_cffi` and the fleet relay both got
+`302` + `Set-Cookie: li_at=delete me` + `clearSiteData: storage`), and the
+revocation propagated into the source Brave session (its own `li_at` vanished
+from the cookie DB). LinkedIn binds `li_at` to the minting browser context;
+any non-browser replay — from the home IP or via the relay — is scored as
+session theft.
+
+Consequences now enforced in code:
+
+- `probe_session`/`aprobe_session` make **no network request** unless
+  `LINKEDIN_HTTP_PROBE=1` (default verdict `unknown`).
+- Every runtime gate (pre-flight, validators, relogin confirmation, pool
+  failover, BF injection choice) treats `unknown` as "no evidence" and keeps
+  the session; liveness is proven **in the browser** (`/feed/` loads).
+- `VoyagerProfileEditClient` raw-HTTP writes are user-initiated actions and
+  remain, but their `auth_ok` is structural only; writes may revoke the
+  session and that is surfaced honestly when they fail.
+- The legacy `browser_cookie3` CLI import path is replaced by the orchestrator
+  (in-browser validation, UA pinning).
+
 ### Production setup checklist for a new install
 
 1. **Fleet host** (one-time):

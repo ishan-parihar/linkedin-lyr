@@ -1,30 +1,34 @@
-"""Voyager direct-HTTP session probe for LinkedIn.
+"""Voyager HTTP session probe for LinkedIn — EXPLICIT OPT-IN ONLY.
 
-The single source of truth for "is this session alive". A direct HTTP probe per
-#2430: GET the Voyager ``/me`` endpoint with the cookie + csrf-token (JSESSIONID
-minus the ``ajax:`` prefix) + ``x-restli-protocol-version: 2.0.0``.
+#2601 (2026-09-08, proven live): replaying browser-minted cookies over plain
+HTTP — from ANY egress, home IP or relayed through the fleet — is itself a
+revocation trigger. LinkedIn answered a freshly minted, in-browser-validated
+jar with ``302`` + ``li_at=delete me`` + ``clearSiteData: storage`` on the very
+first HTTP probe, and the revocation propagated into the source browser. The
+earlier belief that "importing cookies into an automated browser triggers
+rotation (#2329) but plain HTTP is safe" is backwards: the browser context is
+the ONLY place these cookies may be used.
 
-This module deliberately never boots a browser. Importing stored cookies into
-an automated browser is what triggers LinkedIn's server-side rotation (#2329),
-so liveness must be decided over plain HTTP or not at all.
+Therefore ``probe_session``/``aprobe_session`` make NO network request unless
+``LINKEDIN_HTTP_PROBE=1`` is explicitly set, and default to ``unknown``. Every
+runtime gate (pre-flight, validators, relogin confirmation, pool failover,
+BF injection choice) must treat ``unknown`` as "keep the session, decide
+nothing" — liveness is proven by the browser itself (/feed/ loads or the
+authwall appears), never by an out-of-band HTTP call.
 
-Verdicts are honest, not binary (#2593 red-team audit): a probe that could not
-actually ask LinkedIn the question — network error, timeout, 5xx, rate limit —
-returns ``unknown``, never ``dead``. Only LinkedIn *answering* "you are not
-logged in" (302 to the login flow, 401/403) from a trusted egress is ``dead``.
-Callers must treat ``unknown`` as "keep the session, retry later", because
-quarantining cookies on an ``unknown`` is how the relogin loop destroyed good
-sessions: the probe ran from a datacenter IP the account never used, LinkedIn
-answered with an authwall, and the code read that as "cookies invalid" when it
-actually meant "this egress is not trusted for this account".
+When the gate IS explicitly enabled: GET the Voyager ``/me`` endpoint with the
+cookie + csrf-token (JSESSIONID minus the ``ajax:`` prefix) +
+``x-restli-protocol-version: 2.0.0``. Verdicts are honest, not binary (#2593):
+a probe that could not ask LinkedIn the question (network error, timeout, 5xx,
+rate limit) returns ``unknown``, never ``dead``. Only LinkedIn *answering*
+"you are not logged in" from a trusted egress is ``dead`` — and even that
+verdict must never feed an automatic invalidation, because the probe itself
+may have just revoked the session it measured.
 
 Egress: when BrowseFleet is configured (``BROWSEFLEET_URL`` + token, sourced
 from ``~/.linkedin-lyr/bf.env`` by the entrypoints), the probe is relayed
-through the fleet's ``/v1/egress/probe`` endpoint so it leaves from the same
-residential address as the browser. Otherwise the direct request honors
-``PROXY_SERVER`` when set. A ``dead`` verdict is only trusted from an egress
-the session was actually minted on; a direct-from-datacenter authwall is
-recorded as ``unknown`` instead.
+through the fleet's ``/v1/egress/probe`` endpoint. Otherwise the direct
+request honors ``PROXY_SERVER`` when set.
 """
 
 from __future__ import annotations
@@ -263,20 +267,40 @@ def _probe_attempts() -> int:
         return 2
 
 
+def _http_probe_enabled() -> bool:
+    """Whether out-of-band HTTP probing is explicitly opted into.
+
+    Default OFF (#2601): replaying browser-minted cookies over HTTP is itself
+    a revocation trigger, so the runtime must never contact LinkedIn outside
+    a browser context. Set ``LINKEDIN_HTTP_PROBE=1`` only for deliberate
+    diagnostics on jars known to be HTTP-safe (e.g. server-minted sessions).
+    """
+    return os.environ.get("LINKEDIN_HTTP_PROBE", "").strip() == "1"
+
+
 def probe_session(
     cookies: Any, timeout: float = 10.0, attempts: int | None = None
 ) -> ProbeVerdict:
     """Verdict a cookie dict at the Voyager endpoint. Never boots a browser.
 
-    Retries ``unknown`` outcomes (default two attempts, override with
-    ``LINKEDIN_PROBE_ATTEMPTS``) because a single failed TLS handshake to a
-    Cloudflare-fronted endpoint is routine. A definitive ``alive``/``dead``
-    returns immediately; only a probe that never got an answer after all
-    attempts returns ``unknown``.
+    Makes NO network request unless ``LINKEDIN_HTTP_PROBE=1`` (#2601) — an
+    out-of-band HTTP replay of browser-minted cookies is itself a revocation
+    trigger — and returns ``unknown`` in that default case. Callers must
+    treat ``unknown`` as "no evidence either way; keep the session".
+
+    When explicitly enabled, retries ``unknown`` outcomes (default two
+    attempts, override with ``LINKEDIN_PROBE_ATTEMPTS``) because a single
+    failed TLS handshake to a Cloudflare-fronted endpoint is routine. A
+    definitive ``alive``/``dead`` returns immediately; only a probe that
+    never got an answer after all attempts returns ``unknown``.
     """
     normalized = normalize_cookies(cookies)
     if not normalized or not normalized.get("li_at"):
         return "missing"
+
+    if not _http_probe_enabled():
+        logger.debug("voyager probe skipped (LINKEDIN_HTTP_PROBE unset); verdict unknown")
+        return "unknown"
 
     if attempts is None:
         attempts = _probe_attempts()

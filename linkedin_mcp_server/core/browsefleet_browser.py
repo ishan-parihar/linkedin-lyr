@@ -201,30 +201,22 @@ class BrowseFleetBrowserManager:
         url = url.rstrip("/")
 
         # Resolve cookies: live Brave extraction is preferred (freshest li_at),
-        # portable file is fallback. When both exist, prefer the one that probes
-        # alive, falling back to extractor's fresher value.
+        # portable file is fallback. #2601: never HTTP-probe these jars —
+        # replaying browser-minted cookies over HTTP is itself a revocation
+        # trigger. When both jars exist and differ, prefer the freshest
+        # extraction (the browser the user actually uses) and let the fleet
+        # browser prove liveness; a dead jar in the browser is recoverable
+        # (re-import), a burned jar is not.
         portable = _load_portable_cookies()
         extracted = _extract_browser_cookies()
         cookies: dict[str, str] = {}
         if extracted and "li_at" in extracted:
             if portable and "li_at" in portable and portable["li_at"] != extracted["li_at"]:
-                try:
-                    from linkedin_mcp_server.voyager_auth import probe_session
-
-                    ext_alive = probe_session(extracted) == "alive"
-                    port_alive = probe_session(portable) == "alive" if portable else False
-                    if ext_alive:
-                        cookies = extracted
-                        logger.info("Using %d cookies from live Brave (probed alive)", len(cookies))
-                    elif port_alive:
-                        cookies = portable
-                        logger.info("Using %d cookies from portable file (extractor dead)", len(cookies))
-                    else:
-                        cookies = extracted
-                        logger.info("Using %d cookies from live Brave (both stale, preferring fresh)", len(cookies))
-                except Exception:
-                    cookies = extracted
-                    logger.info("Using %d cookies extracted from local browser", len(cookies))
+                cookies = extracted
+                logger.info(
+                    "Using %d cookies from live Brave (fresher than portable file; no HTTP probe)",
+                    len(cookies),
+                )
             else:
                 cookies = extracted
                 logger.info("Using %d cookies extracted from local browser", len(cookies))
@@ -239,23 +231,17 @@ class BrowseFleetBrowserManager:
                 cookies = {}
                 logger.warning("No cookies found from Brave or portable file")
 
-        # #2593: a dead jar injected over a persisted BF profile poisons the
-        # one session that may still be alive — the split brain that kept
-        # re-revoking li_at. Only inject a jar that probes alive; otherwise let
-        # the profileId's persisted session serve (and surface an honest
-        # login error if it has none).
-        if cookies and profile_id:
-            from linkedin_mcp_server.voyager_auth import probe_session
-
-            verdict = probe_session(cookies)
-            if verdict != "alive":
-                logger.warning(
-                    "Skipping cookie injection (probe verdict %s): using the "
-                    "persisted BrowseFleet profile session for %s instead",
-                    verdict,
-                    profile_id,
-                )
-                cookies = {}
+        # #2593/#2601: never let a structurally-broken jar poison a persisted
+        # BF profile session, but do NOT gate on an HTTP probe (it burns
+        # browser-minted jars and defaults to ``unknown`` anyway). Skip
+        # injection only when the jar lacks li_at — the one hard requirement.
+        if cookies and profile_id and "li_at" not in cookies:
+            logger.warning(
+                "Skipping cookie injection (no li_at in jar): using the "
+                "persisted BrowseFleet profile session for %s instead",
+                profile_id,
+            )
+            cookies = {}
 
         self._cookies = cookies
         self._is_authenticated = _REQUIRED_COOKIES.issubset(cookies.keys())

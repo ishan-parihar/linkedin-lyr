@@ -1,16 +1,18 @@
-"""Multi-session cookie pool with probe-first liveness and failover.
+"""Multi-session cookie pool with structural liveness and failover.
 
 The failure mode this module exists to prevent (#2329, #2554): a single
 on-disk ``li_at`` goes stale server-side after a session rotation, the legacy
-validator loads it into an automated browser, and the browser boot *is* the
-thing that triggers the next rotation. The pool fixes both halves:
+validator loads it into an automated browser, and the browser boot *is*
+the thing that triggers the next rotation. The pool fixes both halves:
 
-* **Probe-first liveness** — every session's verdict comes from the direct-HTTP
-  Voyager probe in ``voyager_auth`` (#2430). A stored session only counts as
-  healthy when HTTPS says so; the automated browser is never booted to decide.
-* **Failover** — many sessions (exported from real logged-in browsers per step 4
-  of the fix ladder) live side-by-side here. ``first_live_session`` walks them
-  in order and returns the first one that probes alive, pruning the dead.
+* **Structural liveness** — a pooled session is a candidate when it parses
+  and carries ``li_at``. #2601: the runtime never replays browser-minted
+  cookies over HTTP to decide liveness — that replay is itself a revocation
+  trigger, and a burned jar is unrecoverable while a dead-in-browser jar is
+  just a re-import away. True liveness is proven by the browser on first use.
+* **Failover** — many sessions (exported from real logged-in browsers per
+  step 4 of the fix ladder) live side-by-side here. ``first_live_session``
+  walks them in order and returns the first structurally valid one.
 """
 
 from __future__ import annotations
@@ -139,7 +141,11 @@ async def probe_sessions(
     *,
     timeout: float = 10.0,
 ) -> list[ProbeOutcome]:
-    """Probe every pooled session over direct HTTP. Never boots a browser.
+    """Verdict every pooled session via ``aprobe_session``. Never boots a browser.
+
+    #2601: makes no network request unless ``LINKEDIN_HTTP_PROBE=1`` — by
+    default every entry reports ``unknown`` and nothing is decided. Kept for
+    explicit diagnostics only.
 
     A session that fails to probe (missing cookie, network blip, rotated
     session) is left on disk — failover prunes it only after another live
@@ -175,7 +181,7 @@ async def prune_dead_sessions(
             dead_names.append(entry.name)
     if not live:
         logger.warning(
-            "pool has no live session (%d dead); leaving files for diagnosis",
+            "pool has no confirmed-live session (%d dead); leaving files for diagnosis",
             len(dead_names),
         )
         return [], dead_names
@@ -189,14 +195,15 @@ async def first_live_session(
     *,
     timeout: float = 10.0,
 ) -> PoolEntry | None:
-    """Return the first pooled session that probes alive, or None.
+    """Return the first structurally valid pooled session, or None.
 
-    This is the failover entry point Fix 2 wires the runtime resolution chain
-    to. Deterministic order (name-sorted via list_sessions) keeps failover
-    stable across restarts. Never boots a browser.
+    #2601: selection is structural (parses, carries li_at) — no HTTP probing,
+    which would burn browser-minted jars and default to ``unknown`` anyway.
+    The browser proves liveness on first use. Deterministic order (name-sorted
+    via list_sessions) keeps failover stable across restarts. Never boots a
+    browser here.
     """
     for entry in list_sessions(source_profile_dir):
-        verdict = await aprobe_session(entry.cookies, timeout=timeout)
-        if verdict == "alive":
+        if entry.cookies.get("li_at"):
             return entry
     return None

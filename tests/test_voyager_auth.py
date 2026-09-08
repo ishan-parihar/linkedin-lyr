@@ -1,14 +1,15 @@
-"""Guardrail tests for the honest Voyager session probe (Fix 1, #2593).
+"""Guardrail tests for the honest Voyager session probe (#2593, #2601).
 
 These pin the invariants from OBSCURA_REGRESSION_FIXES.md Fix 1 plus the
-#2593 red-team audit:
+#2593 red-team audit and the #2601 probe-burns-sessions finding:
 
-- cookie liveness is decided over direct HTTP (voyager_auth.probe_session);
-  the validator never boots an automated browser,
-- only LinkedIn *answering* "not logged in" from a trusted egress is "dead":
-  a probe that could not ask LinkedIn the question (network error, 5xx, rate
-  limit, authwall from an untrusted IP) returns "unknown", and callers must
-  not invalidate cookies over it,
+- ``probe_session`` makes NO network request unless ``LINKEDIN_HTTP_PROBE=1``:
+  replaying browser-minted cookies over HTTP is itself a revocation trigger,
+  so the default verdict is ``unknown`` ("no evidence either way"),
+- when explicitly opted in, only LinkedIn *answering* "not logged in" from a
+  trusted egress is "dead": a probe that could not ask LinkedIn the question
+  (network error, 5xx, rate limit, authwall from an untrusted IP) returns
+  "unknown", and callers must not invalidate cookies over it,
 - every cookie-file shape on disk parses to the same flat dict.
 """
 
@@ -41,6 +42,7 @@ def _isolate_probe_env(monkeypatch):
         "PROXY_SERVER",
         "LINKEDIN_PROBE_ATTEMPTS",
         "LINKEDIN_PROBE_UA",
+        "LINKEDIN_HTTP_PROBE",
         "LINKEDIN_FORCE_BROWSER_VALIDATION",
         "LINKEDIN_SKIP_BROWSER_VALIDATION",
     ):
@@ -52,6 +54,12 @@ def _isolate_probe_env(monkeypatch):
     )
     monkeypatch.setattr(va, "_source_state_ua", lambda: None)
     monkeypatch.setattr(va.time, "sleep", lambda _s: None)
+
+
+@pytest.fixture
+def http_probe(monkeypatch):
+    """Opt into out-of-band HTTP probing for tests that pin wire behavior."""
+    monkeypatch.setenv("LINKEDIN_HTTP_PROBE", "1")
 
 
 def _patch_direct(monkeypatch, outcomes):
@@ -67,21 +75,42 @@ def _patch_direct(monkeypatch, outcomes):
 
 
 # ---------------------------------------------------------------------------
-# Verdicts
+# The #2601 gate: default OFF, no network request
 # ---------------------------------------------------------------------------
 
 
-def test_probe_session_missing_when_no_li_at():
+def test_probe_default_makes_no_network_request(monkeypatch):
+    """Default (no LINKEDIN_HTTP_PROBE): unknown, and LinkedIn is never contacted."""
+
+    def boom(*args, **kwargs):
+        raise AssertionError("probe_session must not touch the network by default")
+
+    monkeypatch.setattr(va, "cffi_req", SimpleNamespace(get=boom))
+    monkeypatch.setattr(va, "_probe_via_bf", boom)
+    assert probe_session({"li_at": "x"}) == "unknown"
+
+
+def test_probe_default_verdict_is_unknown_even_for_shaped_jar():
+    assert probe_session({"li_at": "x", "JSESSIONID": "ajax:abc"}) == "unknown"
+
+
+def test_probe_missing_verdict_does_not_need_opt_in():
+    # Structural "missing" needs no network and no opt-in.
     assert probe_session({}) == "missing"
     assert probe_session({"li_at": ""}) == "missing"
 
 
-def test_probe_session_alive_on_200(monkeypatch):
+# ---------------------------------------------------------------------------
+# Verdicts (explicit opt-in)
+# ---------------------------------------------------------------------------
+
+
+def test_probe_session_alive_on_200(http_probe, monkeypatch):
     _patch_direct(monkeypatch, [200])
     assert probe_session({"li_at": "x", "JSESSIONID": "ajax:abc"}) == "alive"
 
 
-def test_probe_session_dead_on_302_from_trusted_egress(monkeypatch):
+def test_probe_session_dead_on_302_from_trusted_egress(http_probe, monkeypatch):
     # PROXY_SERVER makes the direct probe trusted: the session is meant to be
     # used from this egress, so its "not logged in" answer is definitive.
     monkeypatch.setenv("PROXY_SERVER", "socks5://127.0.0.1:1080")
@@ -89,35 +118,35 @@ def test_probe_session_dead_on_302_from_trusted_egress(monkeypatch):
     assert probe_session({"li_at": "x"}) == "dead"
 
 
-def test_probe_session_unknown_on_302_from_untrusted_egress(monkeypatch):
+def test_probe_session_unknown_on_302_from_untrusted_egress(http_probe, monkeypatch):
     # Bare datacenter host: LinkedIn's authwall there can mean "this IP is not
     # trusted for this account" — that is not evidence the cookies died.
     _patch_direct(monkeypatch, [302])
     assert probe_session({"li_at": "x"}) == "unknown"
 
 
-def test_probe_session_unknown_on_network_error(monkeypatch):
+def test_probe_session_unknown_on_network_error(http_probe, monkeypatch):
     _patch_direct(monkeypatch, [RuntimeError("connection refused")])
     assert probe_session({"li_at": "x"}) == "unknown"
 
 
-def test_probe_session_unknown_on_rate_limit_and_5xx(monkeypatch):
+def test_probe_session_unknown_on_rate_limit_and_5xx(http_probe, monkeypatch):
     for status in (429, 500, 503, 999):
         _patch_direct(monkeypatch, [status])
         assert probe_session({"li_at": "x"}) == "unknown"
 
 
-def test_probe_session_retries_unknown_then_alive(monkeypatch):
+def test_probe_session_retries_unknown_then_alive(http_probe, monkeypatch):
     _patch_direct(monkeypatch, [RuntimeError("blip"), 200])
     assert probe_session({"li_at": "x"}) == "alive"
 
 
-def test_probe_session_unknown_after_all_attempts_fail(monkeypatch):
+def test_probe_session_unknown_after_all_attempts_fail(http_probe, monkeypatch):
     _patch_direct(monkeypatch, [RuntimeError("blip"), RuntimeError("blip")])
     assert probe_session({"li_at": "x"}) == "unknown"
 
 
-def test_probe_session_attempts_env_disables_retry(monkeypatch):
+def test_probe_session_attempts_env_disables_retry(http_probe, monkeypatch):
     monkeypatch.setenv("LINKEDIN_PROBE_ATTEMPTS", "1")
     outcomes = [RuntimeError("blip"), RuntimeError("should not fire")]
 
@@ -130,7 +159,7 @@ def test_probe_session_attempts_env_disables_retry(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# BrowseFleet egress
+# BrowseFleet egress (explicit opt-in)
 # ---------------------------------------------------------------------------
 
 
@@ -148,7 +177,7 @@ class _FakeURLOpener:
         return json.dumps(self._payload).encode()
 
 
-def test_probe_bf_verdicts_are_trusted(monkeypatch):
+def test_probe_bf_verdicts_are_trusted(http_probe, monkeypatch):
     monkeypatch.setattr(
         va, "_bf_egress_config", lambda: ("http://bf.test", "tok")
     )
@@ -177,7 +206,7 @@ def test_probe_bf_verdicts_are_trusted(monkeypatch):
     assert probe_session({"li_at": "x"}) == "unknown"
 
 
-def test_probe_bf_relay_down_falls_back_to_direct(monkeypatch):
+def test_probe_bf_relay_down_falls_back_to_direct(http_probe, monkeypatch):
     monkeypatch.setattr(
         va, "_bf_egress_config", lambda: ("http://bf.test", "tok")
     )

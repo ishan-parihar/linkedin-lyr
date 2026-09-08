@@ -7,6 +7,7 @@ for LinkedIn authentication. It bypasses the need for Playwright entirely.
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -99,7 +100,14 @@ class ObscuraCookieManager:
         return cookies
 
     def validate_cookies(self) -> bool:
-        """Validate cookies by making a test request to LinkedIn."""
+        """Validate cookies structurally by default; HTTP check is explicit opt-in.
+
+        #2601: replaying browser-minted cookies over plain HTTP is itself a
+        revocation trigger (LinkedIn answers with 302 + ``li_at=delete me``),
+        so the network test runs ONLY when ``LINKEDIN_HTTP_PROBE=1``. The
+        default is the structural check (required cookies present), which is
+        what every caller that merely gates a code path needs.
+        """
         if not self._cookies:
             self._cookies = self.load_cookies()
 
@@ -112,6 +120,10 @@ class ObscuraCookieManager:
         if missing:
             logger.error("Missing required cookies: %s", missing)
             return False
+
+        if os.environ.get("LINKEDIN_HTTP_PROBE", "").strip() != "1":
+            logger.info("Cookie validation passed (structural; HTTP probe disabled by default)")
+            return True
 
         try:
             # Make a test request to LinkedIn feed
@@ -204,21 +216,23 @@ class ObscuraSessionValidator:
                 "missing": list(missing),
             }
 
-        # Validate with test request
+        # #2601: structural validation only — no HTTP replay of these
+        # cookies (it is itself a revocation trigger). "valid" here means
+        # "the jar is present and complete", not "LinkedIn confirmed it".
         is_valid = self.cookie_manager.validate_cookies()
 
         if is_valid:
             return {
                 "valid": True,
-                "reason": "authenticated",
-                "message": "Session is valid and authenticated",
+                "reason": "cookies_present",
+                "message": "Session jar present and structurally valid (liveness is proven in-browser)",
                 "cookies": len(cookies),
             }
         else:
             return {
                 "valid": False,
-                "reason": "authentication_failed",
-                "message": "Cookie validation failed - session may be expired",
+                "reason": "missing_cookies",
+                "message": "Cookie jar is missing required authentication cookies",
             }
 
 

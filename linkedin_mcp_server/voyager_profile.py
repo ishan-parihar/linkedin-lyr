@@ -15,7 +15,6 @@ no rotating GraphQL op IDs (unlike twitter DM).
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
@@ -106,6 +105,16 @@ class VoyagerProfileEditClient:
         self.timeout = timeout
         self.dry_run = dry_run
         self._require_session()
+
+    @property
+    def auth_ok(self) -> bool:
+        """Structural auth check: li_at present and CSRF derivable.
+
+        No network (#2601): an HTTP liveness check would itself replay the
+        cookies and risk revoking the session it measures. Liveness is proven
+        by the first real write succeeding.
+        """
+        return bool(self.cookies.get("li_at") and self.csrf_token)
 
     # ------------------------------------------------------------------ auth
 

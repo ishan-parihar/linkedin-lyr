@@ -85,10 +85,12 @@ class LinkedInCookieValidator:
         LinkedIn's server-side rotation (#2329), so liveness is decided with a
         plain HTTP probe and the automated browser is never booted here.
 
-        An ``unknown`` probe outcome (network blip, fleet relay down, LinkedIn
-        5xx) validates the session: the probe could not ask LinkedIn the
-        question, so it has no evidence the session died. Returning False here
-        is what sent live sessions into the invalidation loop (#2593).
+        #2601 correction: the plain-HTTP belief was backwards — replaying
+        browser-minted cookies over HTTP is itself a revocation trigger, so
+        the probe makes NO network request by default and returns
+        ``unknown``. ``unknown`` validates the session: no evidence of death
+        means no invalidation. True in-browser liveness is proven by the
+        /feed/ navigation itself.
         """
         try:
             # Fast fail: check that required cookies are present

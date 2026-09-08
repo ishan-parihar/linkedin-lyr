@@ -23,7 +23,6 @@ from linkedin_mcp_server.session_pool import (
     prune_dead_sessions,
     sessions_dir,
 )
-from linkedin_mcp_server.session_state import portable_cookie_path
 
 
 @pytest.fixture
@@ -66,26 +65,20 @@ class TestPoolShape:
         assert names == ["aa", "zz"]
 
 
-class TestProbeDriven:
-    async def test_first_live_picks_alive_over_dead(self, pool_dir, monkeypatch):
+class TestStructuralSelection:
+    """#2601: failover selection is structural; no HTTP probing in the hot path."""
+
+    async def test_first_live_returns_first_structurally_valid(self, pool_dir):
         add_session("dead-one", _cookies("AQED-dead"))
         add_session("alive-two", _cookies("AQED-alive"))
-        results = {"dead": "dead", "alive": "alive"}
-
-        async def fake_probe(cookies, timeout=10.0):
-            return results[cookies["li_at"].split("-")[-1]]
-
-        monkeypatch.setattr(session_pool, "aprobe_session", fake_probe)
+        # No probe patching: selection must not depend on any HTTP verdict.
         entry = await first_live_session(pool_dir)
-        assert entry.name == "alive-two"
+        assert entry.name == "alive-two"  # deterministic name-sorted order
 
-    async def test_first_live_none_when_all_dead(self, pool_dir, monkeypatch):
-        add_session("only", _cookies("AQED-dead"))
-
-        async def dead(cookies, timeout=10.0):
-            return "dead"
-
-        monkeypatch.setattr(session_pool, "aprobe_session", dead)
+    async def test_first_live_none_when_no_li_at_anywhere(self, pool_dir):
+        # add_session refuses jars without li_at, so build the file directly.
+        path = session_pool._session_path("broken", pool_dir)
+        path.write_text(json.dumps({"cookies": {"bscookie": "v=2"}}))
         assert await first_live_session(pool_dir) is None
 
     async def test_prune_preserves_last_survivor(self, pool_dir, monkeypatch):

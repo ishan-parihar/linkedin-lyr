@@ -127,7 +127,10 @@ class TestHandleAuthError:
         cookie_file = tmp_path / "cookies.json"
         cookie_file.write_text('[{"name": "li_at", "value": "AQED-dead"}]')
 
-        async def dead(cookies, timeout=10.0, attempts=None):
+        # handle_auth_error probes via asyncio.to_thread, so the fake must be
+        # a plain sync callable (a coroutine function would return an
+        # un-awaited coroutine object and never equal "dead").
+        def dead(cookies, timeout=10.0, attempts=None):
             return "dead"
 
         monkeypatch.setattr(

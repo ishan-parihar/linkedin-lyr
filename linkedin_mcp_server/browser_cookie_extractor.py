@@ -31,7 +31,7 @@ _CHROMIUM_BASE_DIRS: dict[str, str] = {
     "arc": os.path.join("Arc", "User Data"),
     "edge": "Microsoft Edge",
     "brave": os.path.join("BraveSoftware", "Brave-Browser"),
-    "brave-origin": os.path.join("BraveSoftware", "Brave-Origin-Beta"),  # Brave Origin Beta
+    "brave-origin": os.path.join("BraveSoftware", "Brave-Origin"),
     "chromium": "Chromium",
     "opera": "Opera",
     "vivaldi": "Vivaldi",
@@ -87,18 +87,14 @@ def _iter_chrome_cookie_files(browser_name: str) -> list[str]:
                 os.environ.get("LOCALAPPDATA", ""), "Microsoft", "Edge", "User Data"
             )
         elif browser_name == "brave-origin":
-            root = os.path.join(
-                os.environ.get("LOCALAPPDATA", ""), "BraveSoftware", "Brave-Origin-Beta"
-            )
+            root = os.path.join(os.environ.get("LOCALAPPDATA", ""), "BraveSoftware", "Brave-Origin")
         else:
             root = os.path.join(os.environ.get("LOCALAPPDATA", ""), base_dir)
     else:
         if browser_name == "edge":
             root = os.path.join(os.path.expanduser("~"), ".config", "microsoft-edge")
         elif browser_name == "brave-origin":
-            root = os.path.join(
-                os.path.expanduser("~"), ".config", "BraveSoftware", "Brave-Origin-Beta"
-            )
+            root = os.path.join(os.path.expanduser("~"), ".config", "BraveSoftware", "Brave-Origin")
         else:
             root = os.path.join(os.path.expanduser("~"), ".config", base_dir)
 
@@ -322,7 +318,7 @@ CHROMIUM_BASE_DIRS = {
     "arc": os.path.join("Arc", "User Data"),
     "edge": "Microsoft Edge",
     "brave": os.path.join("BraveSoftware", "Brave-Browser"),
-    "brave-origin": os.path.join("BraveSoftware", "Brave-Origin-Beta"),  # Brave Origin Beta
+    "brave-origin": os.path.join("BraveSoftware", "Brave-Origin"),
     "chromium": "Chromium",
     "opera": "Opera",
     "vivaldi": "Vivaldi",
@@ -374,14 +370,14 @@ def iter_cookie_files(browser_name):
         if browser_name == "edge":
             root = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "Edge", "User Data")
         elif browser_name == "brave-origin":
-            root = os.path.join(os.environ.get("LOCALAPPDATA", ""), "BraveSoftware", "Brave-Origin-Beta")
+            root = os.path.join(os.environ.get("LOCALAPPDATA", ""), "BraveSoftware", "Brave-Origin")
         else:
             root = os.path.join(os.environ.get("LOCALAPPDATA", ""), base_dir)
     else:
         if browser_name == "edge":
             root = os.path.join(os.path.expanduser("~"), ".config", "microsoft-edge")
         elif browser_name == "brave-origin":
-            root = os.path.join(os.path.expanduser("~"), ".config", "BraveSoftware", "Brave-Origin-Beta")
+            root = os.path.join(os.path.expanduser("~"), ".config", "BraveSoftware", "Brave-Origin")
         else:
             root = os.path.join(os.path.expanduser("~"), ".config", base_dir)
     if not os.path.isdir(root):

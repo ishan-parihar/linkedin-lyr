@@ -149,11 +149,14 @@ async def _get_extractor_for_tool():
         # until the hard timeout — and each browser boot can rotate session
         # state server-side.
         #
-        # An ``unknown`` verdict (network blip, fleet relay down, LinkedIn 5xx)
-        # is NOT a dead session: the probe could not ask LinkedIn the question.
-        # Blocking the tool call on it, let alone invalidating cookies over it,
-        # is how the relogin loop fired on live sessions (#2593). Degrade to a
-        # warning and let the scrape itself prove the session either way.
+        # #2601: the probe makes NO network request by default — replaying
+        # browser-minted cookies over HTTP is itself a revocation trigger. It
+        # therefore returns ``unknown`` here unless the operator opted into
+        # HTTP probing, and ``unknown`` is NOT a dead session: it is no
+        # evidence at all. Blocking the tool call on it, let alone invalidating
+        # cookies over it, is how the relogin loop fired on live sessions
+        # (#2593). Degrade to a warning and let the scrape itself prove the
+        # session either way.
         probe_verdict = probe_session(cookies_dict)
         if probe_verdict == "dead":
             axi_error(

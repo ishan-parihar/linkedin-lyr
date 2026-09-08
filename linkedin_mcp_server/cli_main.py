@@ -173,7 +173,14 @@ def get_profile_and_exit() -> None:
 
 
 def import_from_browser_and_exit() -> None:
-    """Import a LinkedIn session from a local browser, validate, persist, exit (AXI format)."""
+    """Import a LinkedIn session from a local browser, validate, persist, exit (AXI format).
+
+    #2601: runs the full orchestrate flow (discovery → decrypt → in-browser
+    /feed/ validation → persist + source-state UA pinning). The legacy
+    browser_cookie3 extractor is NOT used here: it writes cookies.json with no
+    validation and no UA pinning, and its first use at runtime is an HTTP
+    replay that burns browser-minted jars.
+    """
     config = get_config()
     configure_logging(
         log_level=config.server.log_level,
@@ -181,15 +188,15 @@ def import_from_browser_and_exit() -> None:
     )
     logger.info("LinkedIn MCP Server v%s - Browser Import mode", get_version())
 
-    # Use the new browser_cookie_extractor module
-    from linkedin_mcp_server.browser_cookie_extractor import (
-        extract_linkedin_cookies,
-        format_cookies_for_linkedin_mcp,
-    )
-    from linkedin_mcp_server.session_state import auth_root_dir
+    import asyncio
 
-    auth_root = auth_root_dir()
-    output_path = auth_root / "cookies.json"
+    from linkedin_mcp_server.browser_import.orchestrate import (
+        import_session_from_browser,
+    )
+    from linkedin_mcp_server.exceptions import (
+        CookieDecryptionError,
+        NoLinkedInSessionFoundError,
+    )
 
     # Get browser selector from config
     browser = (
@@ -202,47 +209,45 @@ def import_from_browser_and_exit() -> None:
             "On macOS, you may be prompted to allow keychain access."
         )
 
+    user_data_dir = get_profile_dir()
+
     try:
-        # Extract cookies using browser_cookie3 (no browser environment setup needed)
-        cookie_data = extract_linkedin_cookies(browser=browser)
-        if not cookie_data:
-            print(_toon_kv("error", "No LinkedIn cookies found"))
-            if browser:
-                print(_toon_kv("tried_browser", browser))
-            else:
-                print(_toon_kv("tried_browser", "auto-detection across all browsers"))
-            print(_toon_kv("help", "Log into LinkedIn in your browser first, or run with --login"))
+        # The validation step boots Chromium; make sure the browser
+        # environment (bin path, sandbox deps) is configured first.
+        configure_browser_environment()
+        imported = asyncio.run(
+            import_session_from_browser(browser, user_data_dir=user_data_dir)
+        )
+        if not imported:
+            print(_toon_kv("error", "Import did not produce a valid session"))
+            print(
+                _toon_kv(
+                    "help",
+                    "The li_at was found but LinkedIn rejected it in-browser; "
+                    "log into LinkedIn again or run with --login",
+                )
+            )
             sys.exit(1)
 
-        # Format cookies for LinkedIn MCP
-        formatted_cookies = format_cookies_for_linkedin_mcp(cookie_data)
-
-        # Save cookies
-        os.makedirs(auth_root, exist_ok=True)
-
-        with open(output_path, "w") as f:
-            json.dump(formatted_cookies, f, indent=2)
-
-        # Set proper permissions
-        os.chmod(output_path, 0o600)
-
-        # Verify li_at cookie is present
-        li_at_found = any(c.get("name") == "li_at" for c in formatted_cookies)
-
         print(_toon_kv("status", "success"))
-        print(_toon_kv("source", cookie_data.get("source", "unknown")))
-        print(_toon_kv("cookies", len(formatted_cookies)))
-        print(_toon_kv("path", str(output_path)))
-
-        if li_at_found:
-            print(_toon_kv("auth_cookie", "found"))
-        else:
-            print(_toon_kv("auth_cookie", "missing"))
-            print(_toon_kv("warning", "The session may not be fully functional"))
-
+        print(_toon_kv("source", browser or "auto"))
+        print(_toon_kv("message", "Imported and validated"))
+        print(_toon_kv("path", str(portable_cookie_path(user_data_dir))))
         print(_toon_kv("help", "Run `linkedin-lyr --status` to verify your session"))
         sys.exit(0)
 
+    except NoLinkedInSessionFoundError:
+        print(_toon_kv("error", "No LinkedIn cookies found"))
+        if browser:
+            print(_toon_kv("tried_browser", browser))
+        else:
+            print(_toon_kv("tried_browser", "auto-detection across all browsers"))
+        print(_toon_kv("help", "Log into LinkedIn in your browser first, or run with --login"))
+        sys.exit(1)
+    except CookieDecryptionError as e:
+        print(_toon_kv("error", f"Could not import session: {e}"))
+        print(_toon_kv("help", "Run with --login to create a session instead"))
+        sys.exit(1)
     except Exception as e:
         print(_toon_kv("error", f"Failed to import cookies: {e}"))
         logger.exception("Cookie import failed")
@@ -268,6 +273,9 @@ def export_session_and_exit() -> None:
         print(_toon_kv("help", "Run `linkedin-lyr --status` or `linkedin-lyr --login` first"))
         sys.exit(1)
 
+    # #2601: no HTTP probe by default — replaying these cookies over HTTP is
+    # itself a revocation trigger, and export exists to *preserve* the session.
+    # Structural check only; the target host proves liveness in its browser.
     from linkedin_mcp_server.voyager_auth import probe_session
 
     verdict = probe_session(cookies)
@@ -276,8 +284,8 @@ def export_session_and_exit() -> None:
         print(_toon_kv("help", "Run `linkedin-lyr --login` or `--import-from-browser` first"))
         sys.exit(1)
     if verdict == "unknown":
-        print(_toon_kv("error", "Session liveness could not be verified (probe unreachable)"))
-        print(_toon_kv("help", "Retry when the network / BrowseFleet relay is back; the stored session was not modified"))
+        print(_toon_kv("info", "Session not HTTP-probed (default; probing burns browser-minted cookies)"))
+        print(_toon_kv("help", "Set LINKEDIN_HTTP_PROBE=1 to verify liveness before exporting"))
         sys.exit(1)
 
     export_path = Path(config.server.export_session).expanduser()
@@ -325,6 +333,10 @@ def import_session_and_exit() -> None:
         print(_toon_kv("help", "Export with `linkedin-lyr --export-session <path>` on the source host"))
         sys.exit(1)
 
+    # #2601: no HTTP probe by default — an HTTP replay of browser-minted
+    # cookies is itself a revocation trigger and would burn the jar on its
+    # very first contact. Structural check only; the runtime proves liveness
+    # in the browser.
     from linkedin_mcp_server.voyager_auth import probe_session
 
     verdict = probe_session(cookies)
@@ -333,8 +345,8 @@ def import_session_and_exit() -> None:
         print(_toon_kv("help", "Export a live session from the source host and retry"))
         sys.exit(1)
     if verdict == "unknown":
-        print(_toon_kv("error", "Imported session could not be verified (probe unreachable)"))
-        print(_toon_kv("help", "Retry when the network / BrowseFleet relay is back; nothing was imported"))
+        print(_toon_kv("info", "Session not HTTP-probed (default; probing burns browser-minted cookies)"))
+        print(_toon_kv("help", "Set LINKEDIN_HTTP_PROBE=1 to verify liveness before importing"))
         sys.exit(1)
 
     # Canonical on-disk persistence is the list-of-dicts shape the rest of the

@@ -945,8 +945,14 @@ async def invalidate_auth_and_trigger_relogin(
         # can come from a page-level checkpoint, a selector timeout, or a probe
         # that could not reach LinkedIn — none of which is proof the stored
         # session is dead. Quarantining cookies over anything less is what
-        # turned one bad probe into the relogin loop. Only a confirmed-dead
-        # verdict (or no stored cookies at all) authorizes the force-move.
+        # turned one bad probe into the relogin loop.
+        #
+        # #2601: the confirming probe makes NO network request by default
+        # (HTTP replay of browser-minted cookies is itself a revocation
+        # trigger), so it returns ``unknown`` and this guard refuses the
+        # force-move — the conservative outcome. In-browser evidence (the
+        # authwall itself) is the only oracle that may confirm a dead session
+        # in practice; an operator can still opt in via LINKEDIN_HTTP_PROBE=1.
         stored = _load_stored_cookies()
         if stored.get("li_at"):
             from linkedin_mcp_server.voyager_auth import aprobe_session

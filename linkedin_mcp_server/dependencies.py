@@ -82,8 +82,14 @@ async def handle_auth_error(
     # stored session still probes alive (or the probe could not reach
     # LinkedIn), keep the cookies and surface the original error honestly;
     # the destructive relogin only runs on a confirmed-dead verdict.
+    #
+    # #2601: the confirming probe makes NO network request by default (HTTP
+    # replay of browser-minted cookies is itself a revocation trigger), so it
+    # returns ``unknown`` and the guard refuses invalidation — the
+    # conservative outcome. In-browser evidence (the authwall itself) is the
+    # only practical dead-session oracle.
     from linkedin_mcp_server.session_state import portable_cookie_path
-    from linkedin_mcp_server.voyager_auth import normalize_cookies, probe_session
+    from linkedin_mcp_server.voyager_auth import normalize_cookies
 
     stored: dict[str, str] = {}
     try:
@@ -116,16 +122,15 @@ async def handle_auth_error(
 
 
 async def _first_live_pool_session() -> dict[str, str] | None:
-    """Return cookies of the first pooled session that probes alive, else None.
+    """Return cookies of the first structurally valid pooled session, else None.
 
-    Runs probes in a thread so the event loop never blocks on TLS handshakes.
-    Probe-first, browser-free: an empty or all-dead pool returns None and the
-    caller raises an honest "no live session" error instead of booting a
-    browser (which would rotate the stale li_at per #2329).
+    #2601: selection is structural — no HTTP probing, which would burn
+    browser-minted jars (and defaults to ``unknown`` anyway). An empty pool
+    or one without any li_at returns None and the caller raises an honest
+    "no session" error instead of booting a browser.
     """
     for entry in list_sessions():
-        verdict = await asyncio.to_thread(probe_session, entry.cookies)
-        if verdict == "alive":
+        if entry.cookies.get("li_at"):
             return entry.cookies
     return None
 
