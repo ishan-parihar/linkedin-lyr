@@ -101,7 +101,8 @@ class TestHandleAuthError:
             lambda: cookie_file,
         )
         monkeypatch.setattr(
-            "linkedin_mcp_server.voyager_auth.probe_session", alive
+            "linkedin_mcp_server.dependencies.probe_session",
+            alive,
         )
 
         with patch(
@@ -138,7 +139,8 @@ class TestHandleAuthError:
             lambda: cookie_file,
         )
         monkeypatch.setattr(
-            "linkedin_mcp_server.voyager_auth.probe_session", dead
+            "linkedin_mcp_server.dependencies.probe_session",
+            dead,
         )
 
         with patch(
