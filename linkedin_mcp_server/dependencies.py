@@ -141,6 +141,8 @@ async def get_ready_extractor(
     tool_name: str,
 ) -> LinkedInExtractor:
     """Run bootstrap gating, then acquire an authenticated extractor."""
+    from linkedin_mcp_server.core.browser_backend import should_use_browsefleet
+
     try:
         await ensure_tool_ready_or_raise(tool_name, ctx)
 
@@ -149,32 +151,50 @@ async def get_ready_extractor(
 
         if not result.valid:
             logger.warning(f"Cookie validation failed from daemon: {result.error}")
-            # Honest degradation (Fix 5): consult the session pool before
-            # booting a browser. Booting the obscura browser with stale li_at
-            # rotates the session server-side within ~30 min (#2329), so an
-            # empty/dead pool must produce an honest error, never a browser boot.
-            pooled = await _first_live_pool_session()
-            if pooled is not None:
-                result = CookieValidationResult(
-                    valid=True, cookies=pooled, source="pool"
+            if should_use_browsefleet():
+                # #2601b: on BrowseFleet the jar is not the oracle — the fleet
+                # profile's persisted session is. A stale/missing local jar
+                # must not block tool calls; the first navigation proves
+                # liveness the safe way (in-context, never HTTP replay).
+                logger.info(
+                    "BrowseFleet backend: proceeding without jar validation — "
+                    "the fleet profile's persisted session is the oracle"
                 )
             else:
-                raise AuthenticationError(
-                    "No live LinkedIn session available. Export one on a logged-in "
-                    "machine with 'linkedin-lyr --export-session <path>', import it "
-                    "here with '--import-session <path>', or run 'linkedin-lyr --login'."
-                )
+                # Honest degradation (Fix 5): consult the session pool before
+                # booting a browser. Booting the obscura browser with stale li_at
+                # rotates the session server-side within ~30 min (#2329), so an
+                # empty/dead pool must produce an honest error, never a browser boot.
+                pooled = await _first_live_pool_session()
+                if pooled is not None:
+                    result = CookieValidationResult(
+                        valid=True, cookies=pooled, source="pool"
+                    )
+                else:
+                    raise AuthenticationError(
+                        "No live LinkedIn session available. Export one on a logged-in "
+                        "machine with 'linkedin-lyr --export-session <path>', import it "
+                        "here with '--import-session <path>', or run 'linkedin-lyr --login'."
+                    )
 
         browser = await get_or_create_browser()
         page = browser.page
 
-        # Set cookies from ObscuraCookieManager
-        cookie_list = [
-            {"name": name, "value": value, "domain": ".linkedin.com", "path": "/"}
-            for name, value in result.cookies.items()
-        ]
-        await page.context.add_cookies(cookie_list)
+        # Set cookies from ObscuraCookieManager — but never cross-context
+        # (#2601b): on the BrowseFleet backend the fleet profile's own
+        # persisted session is the sanctioned context; injecting daemon/pool
+        # cookies from another machine replays a foreign jar into the fleet
+        # browser, which LinkedIn scores as session theft and revokes
+        # (proven live). Injection is reserved for the local Obscura context
+        # where the jar was minted/validated.
+        from linkedin_mcp_server.core.browser_backend import should_use_browsefleet
 
+        if not should_use_browsefleet():
+            cookie_list = [
+                {"name": name, "value": value, "domain": ".linkedin.com", "path": "/"}
+                for name, value in result.cookies.items()
+            ]
+            await page.context.add_cookies(cookie_list)
         return LinkedInExtractor(page)
     except AuthenticationError as e:
         await handle_auth_error(e, ctx)  # always raises

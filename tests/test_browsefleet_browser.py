@@ -203,7 +203,21 @@ class TestBrowseFleetBrowserManager:
 
         from linkedin_mcp_server.common_utils import load_proxy_env
 
-        load_proxy_env()
-        assert os.environ["LINKEDIN_BROWSER_BACKEND"] == "browsefleet"
-        assert os.environ["BROWSEFLEET_URL"] == "https://bf.example.com"
-        assert os.environ["BROWSEFLEET_TOKEN"] == "tok-from-file"
+        # load_proxy_env() mutates the real os.environ for keys monkeypatch
+        # never snapshotted (they were absent), which would leak
+        # LINKEDIN_BROWSER_BACKEND=browsefleet into every later test in the
+        # process — env-sensitive code paths (e.g. get_ready_extractor's
+        # backend branch) then behave as browsefleet. Snapshot and restore.
+        keys = ("LINKEDIN_BROWSER_BACKEND", "BROWSEFLEET_URL", "BROWSEFLEET_TOKEN")
+        saved = {k: os.environ.get(k) for k in keys}
+        try:
+            load_proxy_env()
+            assert os.environ["LINKEDIN_BROWSER_BACKEND"] == "browsefleet"
+            assert os.environ["BROWSEFLEET_URL"] == "https://bf.example.com"
+            assert os.environ["BROWSEFLEET_TOKEN"] == "tok-from-file"
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
