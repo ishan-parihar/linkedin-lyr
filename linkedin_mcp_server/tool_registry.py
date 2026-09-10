@@ -223,6 +223,28 @@ async def _get_extractor_for_tool():
         )
 
 
+def _install_orphan_alarm(timeout_s: float) -> None:
+    """Self-terminate the child's process group if the supervisor is gone.
+
+    Runs in the ``LINKEDIN_LYR_CHILD=1`` child only. The alarm fires at
+    ``timeout_s + 60`` — 60s past the parent's wall so that, while the
+    parent lives, the parent's kill (with its helpful error message) always
+    wins; the alarm only fires when the parent is gone.
+    """
+    import signal
+
+    defense_s = int(timeout_s) + 60
+
+    def _orphan_self_destruct(signum: int, frame: object) -> None:
+        try:
+            os.killpg(os.getpgrp(), signal.SIGKILL)
+        except Exception:
+            os._exit(137)
+
+    signal.signal(signal.SIGALRM, _orphan_self_destruct)
+    signal.alarm(defense_s)
+
+
 def run_tool_direct(tool_name: str, args: list[str], use_json: bool = False) -> None:
     """Execute a tool directly from CLI without MCP protocol."""
 
@@ -300,7 +322,11 @@ def run_tool_direct(tool_name: str, args: list[str], use_json: bool = False) -> 
 
     from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
 
-    timeout_s = float(os.environ.get("LINKEDIN_TOOL_TIMEOUT", DEFAULT_TOOL_TIMEOUT_SECONDS))
+    timeout_s = float(
+        os.environ.get("LINKEDIN_TOOL_TIMEOUT")
+        or os.environ.get("TOOL_TIMEOUT")
+        or DEFAULT_TOOL_TIMEOUT_SECONDS
+    )
 
     if os.environ.get("LINKEDIN_LYR_CHILD") != "1":
         env = dict(os.environ, LINKEDIN_LYR_CHILD="1")
@@ -331,6 +357,14 @@ def run_tool_direct(tool_name: str, args: list[str], use_json: bool = False) -> 
                 "`linkedin-lyr --import-from-browser`.",
             )
         sys.exit(rc if rc >= 0 else 1)
+
+    # Orphan backstop (#2610): the parent above normally kills this child at
+    # the wall, but if the parent itself dies first (agent crash, SSH drop,
+    # OOM kill) the child would run forever — observed 2026-09-10 as five CLI
+    # jobs wedged up to 12h50m with their Playwright drivers. SIGALRM needs
+    # no parent: if this child is still alive timeout_s + 60 after start,
+    # tear down the whole process group (python + driver + browser children).
+    _install_orphan_alarm(timeout_s)
 
     # Type coercion from schema
     for key, val in list(kwargs.items()):
