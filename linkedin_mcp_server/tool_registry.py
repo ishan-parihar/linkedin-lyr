@@ -132,16 +132,29 @@ async def _get_extractor_for_tool():
         from linkedin_mcp_server.voyager_auth import normalize_cookies, probe_session
 
         cookie_path = portable_cookie_path()
-        with open(cookie_path) as f:
-            cookies_data = json.load(f)
-        cookies_dict = normalize_cookies(cookies_data)
+        cookies_dict: dict[str, str] = {}
+        if cookie_path.exists():
+            with open(cookie_path) as f:
+                cookies_data = json.load(f)
+            cookies_dict = normalize_cookies(cookies_data)
 
         # Check if required cookies are present
         if "li_at" not in cookies_dict:
-            axi_error(
-                "LinkedIn session expired",
-                "No li_at cookie found. Run 'linkedin-lyr --login' to re-authenticate.",
-            )
+            if should_use_browsefleet():
+                # #2601b/#2601c: on BrowseFleet the jar is not the oracle —
+                # the fleet profile's persisted session is. A missing jar
+                # (fresh install, quarantined burned jar) must not block
+                # tool calls; the first in-context navigation proves
+                # liveness the safe way (never HTTP replay).
+                logger.info(
+                    "BrowseFleet backend: no portable jar — proceeding on "
+                    "the fleet profile's persisted session"
+                )
+            else:
+                axi_error(
+                    "LinkedIn session expired",
+                    "No li_at cookie found. Run 'linkedin-lyr --login' to re-authenticate.",
+                )
 
         # Voyager pre-flight gate (HI-RG-056): fail fast on a *confirmed-dead*
         # session BEFORE booting a browser. A dead session makes every
@@ -157,7 +170,9 @@ async def _get_extractor_for_tool():
         # cookies over it, is how the relogin loop fired on live sessions
         # (#2593). Degrade to a warning and let the scrape itself prove the
         # session either way.
-        probe_verdict = probe_session(cookies_dict)
+        # No jar → nothing to probe (BF proceeds on the profile session;
+        # probing an empty jar is meaningless and would log a false warning).
+        probe_verdict = probe_session(cookies_dict) if cookies_dict else "skipped"
         if probe_verdict == "dead":
             axi_error(
                 "LinkedIn session probe returned DEAD (Voyager pre-flight gate)",
@@ -170,14 +185,13 @@ async def _get_extractor_for_tool():
                 "Voyager pre-flight probe could not reach LinkedIn (unknown); "
                 "continuing — the scrape itself will prove the session"
             )
-
         # Use the main profile directory for stability
         temp_profile = str(Path.home() / ".linkedin-lyr" / "profile")
 
         # Cookies should already exist in the main profile from --login
         # Just verify they're there and readable
         cookie_file = Path(temp_profile) / "cookies.json"
-        if not cookie_file.exists():
+        if cookies_dict and not cookie_file.exists():
             cookie_file.parent.mkdir(parents=True, exist_ok=True)
             logger.warning("No cookies found in main profile, writing from portable cookies")
             cookie_list = [
@@ -195,8 +209,14 @@ async def _get_extractor_for_tool():
             ]
             cookie_file.write_text(json.dumps(cookie_list, indent=2))
             logger.info(f"Wrote {len(cookie_list)} cookies to {cookie_file}")
-        else:
+        elif cookie_file.exists():
             logger.info(f"Using existing cookies from {cookie_file}")
+        else:
+            # BF no-jar path: never write an empty jar into the profile.
+            logger.info(
+                "No portable jar — the fleet profile's persisted session "
+                "is the oracle"
+            )
 
         if should_use_browsefleet():
             from linkedin_mcp_server.core.browsefleet_browser import BrowseFleetBrowserManager
