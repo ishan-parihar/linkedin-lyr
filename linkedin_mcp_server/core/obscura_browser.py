@@ -8,6 +8,7 @@ with transformative performance improvements over traditional browser automation
 import asyncio
 import json
 import logging
+import os
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -48,6 +49,39 @@ _DEFAULT_CDP_PORT = 9224
 _PRIVATE_FILE_MODE = 0o600
 
 
+def _resolve_external_cdp() -> str | None:
+    """Resolve an external Obscura CDP endpoint to attach to (no spawn).
+
+    ``LINKEDIN_OBSCURA_CDP_URL`` — explicit ws:// URL wins.
+    ``LINKEDIN_OBSCURA_ATTACH`` — cloakctl profile name (e.g. ``hermes``):
+    resolve the profile's *raw* CDP port at runtime via ``cloakctl status
+    --json`` (ports are dynamic across keeper restarts; the bridge
+    wsEndpoint is NOT Playwright-compatible for new_page). Profile must be
+    live or this returns None so the manager falls back to spawning.
+    """
+    explicit = os.environ.get("LINKEDIN_OBSCURA_CDP_URL", "").strip()
+    if explicit:
+        return explicit
+    profile = os.environ.get("LINKEDIN_OBSCURA_ATTACH", "").strip()
+    if not profile:
+        return None
+    import json as _json
+    try:
+        out = subprocess.run(
+            ["cloakctl", "status", "--json"], capture_output=True, text=True, timeout=15
+        )
+        data = _json.loads(out.stdout)
+        for pr in data.get("profiles", []):
+            if pr.get("profile") == profile and pr.get("live") and pr.get("cdpPort"):
+                endpoint = f"ws://127.0.0.1:{pr['cdpPort']}"
+                logger.info("Attaching to external Obscura (cloakctl profile %s) at %s", profile, endpoint)
+                return endpoint
+        logger.warning("cloakctl profile %s not live; falling back to spawned browser", profile)
+    except Exception as exc:
+        logger.warning("cloakctl status resolution failed (%s); falling back to spawned browser", exc)
+    return None
+
+
 class ObscuraBrowserManager:
     """Obscura-based browser manager with Playwright-compatible interface.
 
@@ -85,6 +119,8 @@ class ObscuraBrowserManager:
 
         # Compatibility with Playwright interface
         self._close_confirmed = False
+        self._external = False
+        self._obscura_process = None
 
     async def __aenter__(self) -> "ObscuraBrowserManager":
         await self.start()
@@ -93,19 +129,25 @@ class ObscuraBrowserManager:
     async def __aexit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
         self._close_confirmed = await self.close()
 
+
     async def start(self) -> None:
         """Start Obscura browser session in CDP server mode."""
         if self._storage_dir is not None:
             raise RuntimeError("Browser already started. Call close() first.")
 
+        external_ws = _resolve_external_cdp()
+        if external_ws:
+            return await self._start_attached(external_ws)
+
         try:
-            # Kill any existing Obscura processes on this port
+            # Clear only OUR port. NEVER `pkill -9 obscura`: that blast radius
+            # kills every Obscura on the host (cloakctl keeper browser, the
+            # shared port-9222 fallback) each time this server boots.
             try:
                 subprocess.run(
                     ["fuser", "-k", f"{self.cdp_port}/tcp"], check=False, capture_output=True
                 )
-                subprocess.run(["pkill", "-9", "obscura"], check=False, capture_output=True)
-                logger.info("Cleared any existing Obscura processes on port %s", self.cdp_port)
+                logger.info("Cleared port %s for our own Obscura server", self.cdp_port)
             except Exception:
                 pass  # Ignore errors from cleanup
 
@@ -134,6 +176,21 @@ class ObscuraBrowserManager:
                 "--stealth",
                 "--quiet",
             ]
+            # Route the browser's own traffic through the configured proxy
+            # (e.g. home residential SOCKS tunnel — see proxy.env). Obscura
+            # takes the proxy at the server level, not per-context.
+            proxy_server = None
+            if isinstance(self.launch_options, dict):
+                _p = self.launch_options.get("proxy")
+                if isinstance(_p, dict):
+                    proxy_server = _p.get("server")
+                elif isinstance(_p, str):
+                    proxy_server = _p
+            if not proxy_server:
+                proxy_server = os.environ.get("PROXY_SERVER", "").strip() or None
+            if proxy_server:
+                cmd += ["--proxy", proxy_server]
+                logger.info("Obscura egress routed through proxy %s", proxy_server)
 
             logger.info("Starting Obscura CDP server on port %s", self.cdp_port)
             self._obscura_process = subprocess.Popen(
@@ -188,9 +245,44 @@ class ObscuraBrowserManager:
 
         except Exception as e:
             logger.error("Failed to start Obscura CDP browser: %s", e)
-            if hasattr(self, "_obscura_process"):
+            if self._obscura_process:
                 self._obscura_process.terminate()
             raise
+
+    async def _start_attached(self, cdp_url: str) -> None:
+        """Attach to an already-running external Obscura over CDP.
+
+        The external browser (e.g. cloakctl keeper) owns its lifecycle:
+        we never kill it, and close() only detaches. The context keeps its
+        live cookies (in-browser liveness already proven); we only top up
+        from the portable jar if li_at is missing.
+        """
+        self._external = True
+        self._playwright_obj = await async_playwright().start()
+        self._playwright_browser = await self._playwright_obj.chromium.connect_over_cdp(cdp_url)
+        contexts = self._playwright_browser.contexts
+        self._playwright_context = contexts[0] if contexts else await self._playwright_browser.new_context(
+            viewport=self.viewport, user_agent=self.user_agent
+        )
+        if not self._playwright_context.pages:
+            self._playwright_page = await self._playwright_context.new_page()
+        else:
+            self._playwright_page = self._playwright_context.pages[0]
+        # Top up only if the attached context lacks a session jar.
+        current = {c.get("name") for c in await self._playwright_context.cookies()}
+        if "li_at" not in current:
+            await self._load_cookies()
+            if self._cookies:
+                await self._playwright_context.add_cookies([
+                    {"name": name, "value": value, "domain": ".linkedin.com", "path": "/"}
+                    for name, value in self._cookies.items()
+                ])
+            logger.info("Attached context had no li_at; topped up %d cookies from portable jar", len(self._cookies))
+        else:
+            self._cookies = {c["name"]: c["value"] for c in await self._playwright_context.cookies() if "linkedin.com" in (c.get("domain") or "")}
+            self._is_authenticated = True
+            logger.info("Attached to live context with an existing LinkedIn session (%d cookies)", len(self._cookies))
+        logger.info("Obscura external attach established (%s)", cdp_url)
 
     async def close(self) -> bool:
         """Close Obscura browser session and cleanup resources."""
@@ -205,8 +297,12 @@ class ObscuraBrowserManager:
             if self._playwright_obj:
                 await self._playwright_obj.stop()
 
-            # Terminate Obscura CDP server
-            if hasattr(self, "_obscura_process"):
+            # Terminate Obscura CDP server — only if WE spawned it.
+            if getattr(self, "_external", False):
+                # External attach: detach only. Never kill a browser we
+                # don't own (cloakctl keeper, shared fallbacks).
+                logger.info("External attach: detaching without killing the browser")
+            elif hasattr(self, "_obscura_process") and self._obscura_process:
                 self._obscura_process.terminate()
                 try:
                     self._obscura_process.wait(timeout=5)
