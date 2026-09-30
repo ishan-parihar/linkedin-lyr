@@ -142,7 +142,8 @@ async def _feed_auth_succeeds(
         await goto_reporting_proxy_errors(
             browser.page,
             "https://www.linkedin.com/feed/",
-            wait_until="domcontentloaded",
+            wait_until="commit",
+            timeout=int(os.environ.get("LINKEDIN_NAV_TIMEOUT_MS", "90000")),
         )
         await stabilize_navigation("feed navigation", logger)
         await record_page_trace(

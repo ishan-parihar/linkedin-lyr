@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import dataclass
 import json
 import logging
+import os
 import re
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import parse_qs, quote_plus, urljoin, urlparse
@@ -48,6 +49,19 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 WaitUntil = Literal["commit", "domcontentloaded", "load", "networkidle"]
+
+
+def _content_wait_ms(default_ms: int = 10000) -> int:
+    """Content-populate wait budget, scaled for slow proxied tunnels.
+
+    NAV timeout env is the navigation budget; content waits use a quarter of
+    it (floor = default) so a 240s nav budget yields 60s content waits.
+    """
+    try:
+        nav = int(os.environ.get("LINKEDIN_NAV_TIMEOUT_MS", "90000"))
+    except ValueError:
+        nav = 90000
+    return max(default_ms, min(nav // 4, 120000))
 
 # Pacing between page navigations
 _NAV_DELAY = 2.0
@@ -846,7 +860,8 @@ class LinkedInExtractor:
                 extra={"target_url": url, "wait_until": wait_until},
             )
             try:
-                await self._page.goto(url, wait_until=wait_until, timeout=30000)
+                _nav_timeout = int(os.environ.get("LINKEDIN_NAV_TIMEOUT_MS", "90000"))
+                await self._page.goto(url, wait_until=wait_until, timeout=_nav_timeout)
                 await stabilize_navigation(f"goto {url}", logger)
                 await record_page_trace(
                     self._page,
@@ -1160,16 +1175,21 @@ class LinkedInExtractor:
         self,
         *,
         minimum_length: int = 100,
-        timeout: int = 10000,
+        timeout: int = 0,
         log_context: str,
     ) -> None:
         """Wait for main content to populate enough text to scrape."""
+        if timeout <= 0:
+            timeout = _content_wait_ms(10000)
         try:
             await self._page.wait_for_function(
                 """({ minimumLength }) => {
                     const main = document.querySelector('main');
-                    if (!main) return false;
-                    return main.innerText.length > minimumLength;
+                    // SPA surfaces (e.g. /messaging/) may not render <main>;
+                    // accept a populated body as evidence the app shell loaded.
+                    const container = main || document.body;
+                    if (!container) return false;
+                    return (container.innerText || '').length > minimumLength;
                 }""",
                 arg={"minimumLength": minimum_length},
                 timeout=timeout,
@@ -1298,7 +1318,7 @@ class LinkedInExtractor:
                     if (!main) return false;
                     return main.innerText.length > 200;
                 }""",
-                timeout=10000,
+                timeout=_content_wait_ms(10000),
             )
         except PlaywrightTimeoutError:
             logger.debug("Feed content did not appear on %s", url)
@@ -1476,7 +1496,7 @@ class LinkedInExtractor:
                         if (!main) return false;
                         return main.innerText.length > 200;
                     }""",
-                    timeout=10000,
+                    timeout=_content_wait_ms(10000),
                 )
             except PlaywrightTimeoutError:
                 logger.debug("Activity feed content did not appear on %s", url)
@@ -1492,7 +1512,7 @@ class LinkedInExtractor:
                         if (!main) return false;
                         return main.innerText.length > 100;
                     }""",
-                    timeout=10000,
+                    timeout=_content_wait_ms(10000),
                 )
             except PlaywrightTimeoutError:
                 logger.debug("Search results content did not appear on %s", url)
@@ -1513,7 +1533,7 @@ class LinkedInExtractor:
                         if (!main) return false;
                         return main.querySelectorAll('a[href*="/in/"]').length > 0;
                     }""",
-                    timeout=5000,
+                    timeout=_content_wait_ms(5000),
                 )
             except PlaywrightTimeoutError:
                 logger.debug("Company people listing did not appear on %s", url)
@@ -1534,7 +1554,7 @@ class LinkedInExtractor:
                             && !text.startsWith('More profiles for you')
                             && !text.startsWith('Explore premium profiles');
                     }""",
-                    timeout=10000,
+                    timeout=_content_wait_ms(10000),
                 )
             except PlaywrightTimeoutError:
                 logger.debug("Detail section content did not appear on %s", url)
@@ -1901,7 +1921,7 @@ class LinkedInExtractor:
                         await self._page.wait_for_selector(
                             _DIALOG_TEXTAREA_SELECTOR,
                             state="visible",
-                            timeout=3000,
+                            timeout=_content_wait_ms(3000),
                         )
                     except PlaywrightTimeoutError:
                         logger.debug("Note textarea did not appear")
@@ -2014,7 +2034,7 @@ class LinkedInExtractor:
                 await self._page.wait_for_selector(
                     _DIALOG_TEXTAREA_SELECTOR,
                     state="visible",
-                    timeout=3000,
+                    timeout=_content_wait_ms(3000),
                 )
             except PlaywrightTimeoutError:
                 logger.debug("Note textarea did not appear during quota probe")
@@ -3734,7 +3754,7 @@ class LinkedInExtractor:
             await self._page.wait_for_selector(
                 "main li label[aria-label]",
                 state="attached",
-                timeout=10000,
+                timeout=_content_wait_ms(10000),
             )
         except PlaywrightTimeoutError:
             logger.debug(

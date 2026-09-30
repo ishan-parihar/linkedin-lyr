@@ -652,6 +652,19 @@ class ObscuraPage:
         logger.debug("Waiting for selector: %s (timeout=%s, state=%s)", selector, timeout, state)
         return await self._playwright_page.wait_for_selector(selector, timeout=timeout, state=state)
 
+    async def wait_for_function(
+        self, expression: str, timeout: float = 30000, **kwargs: Any
+    ) -> Any:
+        """Wait for a JS expression to evaluate truthy (Playwright-compatible).
+
+        Delegates to the underlying Playwright page. Callers in this codebase
+        pass self-contained expressions (no external args), so plain delegation
+        is sufficient.
+        """
+        return await self._playwright_page.wait_for_function(
+            expression, timeout=timeout, **kwargs
+        )
+
     # --- Playwright-compatible event listener interface ---
     def on(self, event: str, handler: callable) -> None:
         """Add an event listener (Playwright-compatible)."""
