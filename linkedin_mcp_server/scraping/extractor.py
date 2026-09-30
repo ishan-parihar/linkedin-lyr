@@ -2782,7 +2782,9 @@ class LinkedInExtractor:
         await detect_rate_limit(self._page)
 
         try:
-            await self._page.wait_for_selector("main")
+            await self._page.wait_for_selector(
+                "main", timeout=_content_wait_ms(10000)
+            )
         except PlaywrightTimeoutError:
             logger.debug("Profile page did not load for %s", linkedin_username)
 
@@ -3955,7 +3957,9 @@ class LinkedInExtractor:
         await detect_rate_limit(self._page)
 
         try:
-            await self._page.wait_for_selector("main")
+            await self._page.wait_for_selector(
+                "main", timeout=_content_wait_ms(10000)
+            )
         except PlaywrightTimeoutError:
             logger.debug("Profile page did not load for %s", linkedin_username)
 
