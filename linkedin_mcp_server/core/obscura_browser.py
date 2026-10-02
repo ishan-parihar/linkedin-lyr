@@ -130,6 +130,97 @@ class ObscuraBrowserManager:
         self._close_confirmed = await self.close()
 
 
+    def _clear_cdp_port(self) -> bool:
+        """t_2c8cda32: clear stale holders of our CDP port before boot.
+
+        Prefers `fuser -k` when installed; falls back to ss-parse + targeted
+        SIGTERM/SIGKILL of ONLY the obscura process serving OUR port AND our
+        storage dir (never the cloakctl keeper browser or shared fallbacks).
+        Returns True when the port is clear. Raises RuntimeError if the port
+        is still occupied after the sweep — booting into an occupied port is
+        precisely the 9224 wedge this prevents.
+        """
+        import re
+        import shutil
+        import time as _time
+
+        port = self.cdp_port
+        our_dir = str(self.user_data_dir).rstrip("/") if self.user_data_dir else ""
+
+        if shutil.which("fuser"):
+            subprocess.run(
+                ["fuser", "-k", f"{port}/tcp"], check=False, capture_output=True
+            )
+        else:
+            def _holders():
+                out = subprocess.run(
+                    ["ss", "-tlnpH", f"sport = :{port}"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                pids = set(re.findall(r"pid=(\d+)", out.stdout or ""))
+                result = []
+                for pid_s in pids:
+                    try:
+                        with open(f"/proc/{pid_s}/cmdline", "rb") as f:
+                            cmd = f.read().replace(b"\x00", b" ").decode("utf-8", "replace")
+                    except (FileNotFoundError, ProcessLookupError):
+                        continue
+                    result.append((int(pid_s), cmd))
+                return result
+
+            def _is_ours(cmd):
+                # Kill ONLY obscura servers on OUR port with OUR storage dir.
+                # The cloakctl keeper (port 49001, other storage dir) and the
+                # shared port-9222 fallback never match this signature.
+                return (
+                    "obscura" in cmd
+                    and f"--port {port}" in cmd
+                    and (not our_dir or our_dir in cmd)
+                )
+
+            for pid, cmd in _holders():
+                if not _is_ours(cmd):
+                    logger.warning(
+                        "Port %s held by non-matching pid %d (%s) — NOT killed",
+                        port, pid, cmd[:120],
+                    )
+                    continue
+                logger.warning(
+                    "Killing stale obscura child pid=%d holding port %d (%s)",
+                    pid, port, cmd[:120],
+                )
+                try:
+                    os.kill(pid, 15)
+                except ProcessLookupError:
+                    pass
+
+            # SIGTERM grace, then escalate to SIGKILL for matching pids
+            deadline = _time.monotonic() + 5
+            while _time.monotonic() < deadline:
+                chk = subprocess.run(
+                    ["ss", "-tlnH", f"sport = :{port}"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                if not (chk.stdout or "").strip():
+                    return True
+                for pid, cmd in _holders():
+                    if _is_ours(cmd):
+                        try:
+                            os.kill(pid, 9)
+                        except (ProcessLookupError, PermissionError):
+                            pass
+                _time.sleep(0.5)
+
+            chk = subprocess.run(
+                ["ss", "-tlnH", f"sport = :{port}"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if (chk.stdout or "").strip():
+                raise RuntimeError(
+                    f"Port {port} still occupied after sweep — refusing to boot into the wedge"
+                )
+        return True
+
     async def start(self) -> None:
         """Start Obscura browser session in CDP server mode."""
         if self._storage_dir is not None:
@@ -143,13 +234,13 @@ class ObscuraBrowserManager:
             # Clear only OUR port. NEVER `pkill -9 obscura`: that blast radius
             # kills every Obscura on the host (cloakctl keeper browser, the
             # shared port-9222 fallback) each time this server boots.
-            try:
-                subprocess.run(
-                    ["fuser", "-k", f"{self.cdp_port}/tcp"], check=False, capture_output=True
-                )
+            # t_2c8cda32: fuser (psmisc) is ABSENT on this VPS — the old call
+            # was a silent no-op, so leaked obscura children from hard-killed
+            # CLI calls held port 9224 forever and every boot bind-failed
+            # with an empty trace-run. Use the portable janitor instead.
+            _cleared = self._clear_cdp_port()
+            if _cleared:
                 logger.info("Cleared port %s for our own Obscura server", self.cdp_port)
-            except Exception:
-                pass  # Ignore errors from cleanup
 
             # Ensure Obscura binary is available and up to date
             binary_path = await ensure_obscura_binary()
