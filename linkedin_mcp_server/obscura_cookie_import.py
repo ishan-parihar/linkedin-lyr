@@ -36,20 +36,29 @@ class ObscuraCookieManager:
         self._cookies: dict[str, str] = {}
 
     def load_cookies(self) -> dict[str, str]:
-        """Load cookies from storage."""
+        """Load cookies from storage.
+
+        Accepts every store shape seen in the wild (t_351b92a4):
+        the canonical list of ``{"name","value",...}`` objects, the
+        single-wrap ``{"cookies": [...]}`` export, the legacy
+        ``{"cookies": {name: value}}`` wrap, and a flat ``{name: value}``
+        dict (rebuild_from_cdp / import_li_session write the flat shape).
+        Delegates to voyager_auth.normalize_cookies so the acceptance
+        rules live in exactly one place.
+        """
         if not self.cookie_path.exists():
             return {}
 
         try:
             with open(self.cookie_path) as f:
-                cookie_list = json.load(f)
+                raw = json.load(f)
 
-            cookies = {}
-            for cookie in cookie_list:
-                name = cookie.get("name")
-                value = cookie.get("value")
-                if name and value:
-                    cookies[name] = value
+            from linkedin_mcp_server.voyager_auth import normalize_cookies
+
+            cookies = normalize_cookies(raw)
+            # The profile-dir store may carry a synthetic "cookie_string"
+            # entry; it is a derived artifact, never a real cookie.
+            cookies.pop("cookie_string", None)
 
             self._cookies = cookies
             return cookies
