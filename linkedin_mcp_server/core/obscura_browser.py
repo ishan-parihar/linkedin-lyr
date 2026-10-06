@@ -790,7 +790,14 @@ class ObscuraPage:
             if found:
                 return await self._playwright_page.query_selector(selector)
             await _asyncio.sleep(0.25)
-        from playwright.async_api import TimeoutError as _PWTimeout
+        # t_7fa793c3: callers throughout the codebase (extractor, core.utils)
+        # catch patchright.async_api.TimeoutError, the API this wrapper was
+        # originally written against. This file imports VANILLA playwright
+        # (obscura CDP is vanilla-compatible), so raising the vanilla TO here
+        # escaped every graceful-degrade except clause and hard-killed tools
+        # on what should be a benign wait timeout. Raise the patchright TO so
+        # callers' `except PlaywrightTimeoutError` actually catches it.
+        from patchright.async_api import TimeoutError as _PWTimeout
         raise _PWTimeout(f"wait_for_selector: Timeout {timeout}ms exceeded (evaluate fallback).")
 
     async def wait_for_function(
@@ -825,7 +832,9 @@ class ObscuraPage:
             if val:
                 return val
             await _asyncio.sleep(0.5)
-        from playwright.async_api import TimeoutError as _PWTimeout
+        # t_7fa793c3: raise the patchright TO too, see wait_for_selector note;
+        # the vanilla-playwright TO was invisible to callers' except clauses.
+        from patchright.async_api import TimeoutError as _PWTimeout
         raise _PWTimeout(f"wait_for_function: Timeout {timeout}ms exceeded (evaluate fallback).")
 
     # --- Playwright-compatible event listener interface ---

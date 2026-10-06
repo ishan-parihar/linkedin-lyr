@@ -24,6 +24,7 @@ from linkedin_mcp_server.core import (
 from linkedin_mcp_server.core.exceptions import (
     AuthenticationError,
     LinkedInScraperException,
+    RateLimitError,
 )
 from linkedin_mcp_server.debug_trace import record_page_trace
 from linkedin_mcp_server.debug_utils import stabilize_navigation
@@ -938,6 +939,19 @@ class LinkedInExtractor:
                     },
                 )
                 await self._log_navigation_failure(url, wait_until, exc, hops)
+                # t_caf1741b / t_7fa793c3: a redirect storm ("Too many
+                # redirects") is LinkedIn's server-side egress/automation
+                # flag, not a transient network fault. Retrying or falling
+                # through to selector waits just wedges the tool to its hard
+                # 480s wall (3x observed Oct 5-6 on /messaging/). Fail FAST
+                # as a rate-limit verdict so the caller arms cooldown and
+                # the loop stops probing a flagged egress.
+                if "Too many redirects" in str(exc):
+                    raise RateLimitError(
+                        "LinkedIn redirect-storm on navigation (server-side "
+                        "egress or automation flag). Stopping retry cycle.",
+                        suggested_wait_time=3600,
+                    ) from exc
                 await self._raise_if_auth_barrier(url, navigation_error=exc)
                 # Re-raised as a redacted copy rather than the original: with a
                 # proxy configured, a driver error can quote the proxy URL, and
@@ -3940,6 +3954,32 @@ class LinkedInExtractor:
         raw_result = await self._extract_root_content(["main"])
         raw = raw_result["text"]
         cleaned = strip_linkedin_noise(raw) if raw else ""
+
+        # t_7fa793c3: on egress-flagged sessions LinkedIn serves the
+        # messaging route as a raw SSR JSON stream (Voyager collection
+        # payloads + bpr-guid wire logs) instead of mounting the SPA — no
+        # <main>, no conversation rows, ~280KB of i18n config blobs.
+        # Returning that blob as "results" poisons downstream consumers
+        # (P4 reply classifiers regex-scan it and can false-match
+        # 'unsubscribe'/'digest' strings inside chameleon i18n configs).
+        # Detect it and return a compact, explicit unavailable verdict.
+        _spa_unmounted = bool(raw) and (
+            raw.lstrip().startswith('{"data"') or '"request":"/voyager' in raw[:20000]
+        )
+        if _spa_unmounted:
+            logger.warning(
+                "Messaging search returned a raw SSR JSON stream (SPA never "
+                "mounted) — egress-flagged response; returning unavailable verdict"
+            )
+            return self._single_section_result(
+                self._page.url,
+                "search_results",
+                "[messaging unavailable] LinkedIn served a raw SSR JSON "
+                "stream instead of the messaging app (SPA never mounted). "
+                "This is an egress/automation flag, not a session-death "
+                "signal. Retry later or from a different egress.",
+            )
+
         references: list[Reference] = (
             build_references(raw_result["references"], "search_results") if cleaned else []
         )
