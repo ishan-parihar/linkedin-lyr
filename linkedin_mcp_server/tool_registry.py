@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import sys
+import time
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -427,11 +428,16 @@ def run_tool_direct(tool_name: str, args: list[str], use_json: bool = False) -> 
     kwargs["ctx"] = ctx
 
     # Call the tool
+    started = time.perf_counter()
+    audit_ok = True
+    audit_error = None
     try:
         result = asyncio.run(tool.fn(**kwargs))
     except SystemExit:
         raise
     except TypeError as e:
+        audit_ok = False
+        audit_error = f"TypeError: {e}"
         # Catch missing required args (e.g. "missing 1 required positional argument")
         # LinkedIn tools may have dependency-injected params that don't appear in schema
         error_msg = str(e)
@@ -443,8 +449,21 @@ def run_tool_direct(tool_name: str, args: list[str], use_json: bool = False) -> 
         else:
             axi_error(f"Tool `{tool_name}` failed: {e}", "Check your configuration and try again")
     except Exception as e:
+        audit_ok = False
+        audit_error = f"{type(e).__name__}: {e}"
         axi_error(f"Tool `{tool_name}` failed: {e}", "Check your configuration and try again")
     finally:
+        try:
+            from linkedin_mcp_server.auth_audit import log_tool_call
+
+            log_tool_call(
+                tool_name,
+                ok=audit_ok,
+                duration_s=time.perf_counter() - started,
+                error=audit_error,
+            )
+        except Exception:
+            pass
         # Cleanup browser only (main profile directory is not cleaned up)
         logger.info("Cleaning up browser...")
         if browser:
