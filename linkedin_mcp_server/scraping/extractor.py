@@ -861,7 +861,33 @@ class LinkedInExtractor:
             )
             try:
                 _nav_timeout = int(os.environ.get("LINKEDIN_NAV_TIMEOUT_MS", "90000"))
-                await self._page.goto(url, wait_until=wait_until, timeout=_nav_timeout)
+                try:
+                    await self._page.goto(url, wait_until=wait_until, timeout=_nav_timeout)
+                except Exception as nav_exc:
+                    # t_e3f07ebb: obscura's engine enforces an INTERNAL 30s
+                    # Page.navigate deadline that ignores the CDP timeout we
+                    # pass. Heavy SPA pages (/messaging/) over the home SOCKS
+                    # tunnel routinely exceed it even though the page would
+                    # finish loading; the error is transient, not an auth or
+                    # proxy failure. One bounded retry: on the second attempt
+                    # resources are warm and it typically lands. If the retry
+                    # also misses the deadline, fall through — the page may
+                    # still be usable, and downstream waits decide.
+                    if "navigation exceeded 30000ms deadline" not in str(nav_exc):
+                        raise
+                    logger.warning(
+                        "goto hit obscura internal 30s nav deadline (url=%s); retrying once",
+                        url,
+                    )
+                    try:
+                        await self._page.goto(url, wait_until=wait_until, timeout=_nav_timeout)
+                    except Exception as retry_exc:
+                        if "navigation exceeded 30000ms deadline" not in str(retry_exc):
+                            raise
+                        logger.warning(
+                            "goto retry also hit the 30s deadline (url=%s); continuing",
+                            url,
+                        )
                 await stabilize_navigation(f"goto {url}", logger)
                 await record_page_trace(
                     self._page,

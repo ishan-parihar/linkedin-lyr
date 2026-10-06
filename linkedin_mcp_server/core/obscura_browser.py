@@ -739,9 +739,59 @@ class ObscuraPage:
 
         Uses state="attached" by default instead of "visible" since hidden elements
         are common in LinkedIn's DOM structure.
+
+        t_e3f07ebb: obscura 0.2.3's Playwright UtilityScript crashes on
+        LinkedIn pages ("TypeError: Cannot read properties of undefined
+        (reading 'log')") whenever the injected poll script runs there,
+        killing every wait-based tool (send_message, get_inbox, search,
+        scrapes). page.evaluate() itself is unaffected. So: try the native
+        Playwright wait first; on that specific TypeError, fall back to a
+        simple evaluate-based poll loop (querySelector[All] + visibility
+        heuristic), which runs entirely through the working evaluate path.
         """
         logger.debug("Waiting for selector: %s (timeout=%s, state=%s)", selector, timeout, state)
-        return await self._playwright_page.wait_for_selector(selector, timeout=timeout, state=state)
+        try:
+            return await self._playwright_page.wait_for_selector(
+                selector, timeout=timeout, state=state
+            )
+        except Exception as e:
+            # t_e3f07ebb: obscura 0.2.3 UtilityScript crash surfaces as a
+            # wrapped playwright Error, NOT a builtin TypeError — match on
+            # the message signature.
+            if "reading 'log'" not in str(e):
+                raise
+        # Evaluate-based fallback poll (obscura UtilityScript crash path).
+        import asyncio as _asyncio
+        deadline = _asyncio.get_event_loop().time() + (timeout / 1000.0)
+        if state == "hidden":
+            # Wait until the element is gone or not visible.
+            check = (
+                "(() => { const el = document.querySelector(%r);"
+                " if (!el) return true;"
+                " const s = getComputedStyle(el);"
+                " return s.visibility === 'hidden' || s.display === 'none'"
+                "   || !(el.offsetWidth || el.offsetHeight || el.getClientRects().length); })()"
+            ) % (selector,)
+        else:
+            check = (
+                "(() => { const el = document.querySelector(%r);"
+                " if (!el) return false;"
+                " if (%r === 'visible') {"
+                "   const s = getComputedStyle(el);"
+                "   return !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)"
+                "     && s.visibility !== 'hidden' && s.display !== 'none'; }"
+                " return true; })()"
+            ) % (selector, state)
+        while _asyncio.get_event_loop().time() < deadline:
+            try:
+                found = await self._playwright_page.evaluate(check)
+            except Exception:
+                found = False
+            if found:
+                return await self._playwright_page.query_selector(selector)
+            await _asyncio.sleep(0.25)
+        from playwright.async_api import TimeoutError as _PWTimeout
+        raise _PWTimeout(f"wait_for_selector: Timeout {timeout}ms exceeded (evaluate fallback).")
 
     async def wait_for_function(
         self, expression: str, timeout: float = 30000, **kwargs: Any
@@ -751,10 +801,32 @@ class ObscuraPage:
         Delegates to the underlying Playwright page. Callers in this codebase
         pass self-contained expressions (no external args), so plain delegation
         is sufficient.
+
+        t_e3f07ebb: same UtilityScript-crash fallback as wait_for_selector —
+        poll the expression via the working page.evaluate() path when the
+        native wait dies with the obscura 0.2.3 TypeError.
         """
-        return await self._playwright_page.wait_for_function(
-            expression, timeout=timeout, **kwargs
-        )
+        try:
+            return await self._playwright_page.wait_for_function(
+                expression, timeout=timeout, **kwargs
+            )
+        except Exception as e:
+            if "reading 'log'" not in str(e):
+                raise
+        import asyncio as _asyncio
+        arg = kwargs.get("arg")
+        deadline = _asyncio.get_event_loop().time() + (timeout / 1000.0)
+        fn = expression
+        while _asyncio.get_event_loop().time() < deadline:
+            try:
+                val = await self._playwright_page.evaluate(fn, arg)
+            except Exception:
+                val = None
+            if val:
+                return val
+            await _asyncio.sleep(0.5)
+        from playwright.async_api import TimeoutError as _PWTimeout
+        raise _PWTimeout(f"wait_for_function: Timeout {timeout}ms exceeded (evaluate fallback).")
 
     # --- Playwright-compatible event listener interface ---
     def on(self, event: str, handler: callable) -> None:
