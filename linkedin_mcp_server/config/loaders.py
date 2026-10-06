@@ -576,6 +576,12 @@ def load_from_args(config: AppConfig) -> AppConfig:
     )
 
     parser.add_argument(
+        "--auth-audit",
+        action="store_true",
+        help="Print the persistent auth audit ledger (tool calls + invalidation signals) and exit",
+    )
+
+    parser.add_argument(
         "--logout",
         action="store_true",
         help="Clear stored LinkedIn browser profile",
@@ -802,6 +808,9 @@ def load_from_args(config: AppConfig) -> AppConfig:
 
     if args.status:
         config.server.status = True
+
+    if getattr(args, "auth_audit", False):
+        config.server.auth_audit = True
 
     if args.logout:
         config.server.logout = True

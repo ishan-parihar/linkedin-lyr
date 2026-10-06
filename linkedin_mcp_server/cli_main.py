@@ -810,6 +810,36 @@ def main() -> None:
         if config.server.status:
             profile_info_and_exit()
 
+        # Handle --auth-audit flag: print the persistent auth audit ledger
+        if config.server.auth_audit:
+            from linkedin_mcp_server.auth_audit import audit_log_path, summarize
+
+            summary = summarize()
+            print("auth_audit:")
+            print(f"  ledger: {audit_log_path()}")
+            print(f"  records_in_window: {summary['records']}")
+            print(f"  window_start: {summary['window_start']}")
+            tools = summary["tools"]
+            if tools:
+                print("  tools:")
+                for name, slot in sorted(
+                    tools.items(), key=lambda kv: -kv[1]["calls"]
+                ):
+                    err = f", {slot['errors']} errored" if slot["errors"] else ""
+                    print(f"    {name}: {slot['calls']} calls{err}")
+            else:
+                print("  tools: (no tool calls recorded yet)")
+            inv = summary["invalidations"]
+            if inv:
+                print("  invalidation_signals:")
+                for e in inv:
+                    wait = f" wait={e['wait_time']}s" if e.get("wait_time") else ""
+                    ctx = f" in {e['context']}" if e.get("context") else ""
+                    print(f"    {e['ts']} {e['signal']}{ctx}{wait}: {e.get('detail') or ''}")
+            else:
+                print("  invalidation_signals: (none)")
+            sys.exit(0)
+
         logger.debug(f"Server configuration: {config}")
 
         # Phase 1: Server Runtime

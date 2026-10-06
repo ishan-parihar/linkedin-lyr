@@ -373,6 +373,7 @@ class ServerConfig:
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "WARNING"
     login: bool = False
     status: bool = False  # Check session validity and exit
+    auth_audit: bool = False  # Print the persistent auth audit ledger and exit
     logout: bool = False
     yes: bool = False  # Auto-confirm destructive prompts (e.g. --logout)
     # Browser key or "auto"; triggers import-from-browser-and-exit.

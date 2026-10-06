@@ -45,6 +45,27 @@ from linkedin_mcp_server.error_diagnostics import (
 logger = logging.getLogger(__name__)
 
 
+def _audit_auth(
+    signal: str,
+    context: str = "",
+    *,
+    wait_time: int | None = None,
+    detail: str | None = None,
+) -> None:
+    """Best-effort auth-audit append; must never break error handling."""
+    try:
+        from linkedin_mcp_server.auth_audit import log_auth_event
+
+        log_auth_event(
+            signal,
+            detail=detail,
+            context=context or None,
+            wait_time=wait_time,
+        )
+    except Exception:
+        logger.debug("Auth audit append failed", exc_info=True)
+
+
 def _raise_tool_error_with_diagnostics(
     exception: Exception,
     message: str,
@@ -128,6 +149,7 @@ def raise_tool_error(exception: Exception, context: str = "") -> NoReturn:
 
     elif isinstance(exception, SessionExpiredError):
         logger.warning("Session expired%s: %s", ctx, exception)
+        _audit_auth("session_expired", context)
         _raise_tool_error_with_diagnostics(
             exception,
             "Session expired. Run with --login to create a new browser profile.",
@@ -136,6 +158,7 @@ def raise_tool_error(exception: Exception, context: str = "") -> NoReturn:
 
     elif isinstance(exception, AuthenticationError):
         logger.warning("Authentication failed%s: %s", ctx, exception)
+        _audit_auth("auth_failed", context)
         _raise_tool_error_with_diagnostics(
             exception,
             "Authentication failed. Run with --login to re-authenticate.",
@@ -145,6 +168,7 @@ def raise_tool_error(exception: Exception, context: str = "") -> NoReturn:
     elif isinstance(exception, RateLimitError):
         wait_time = getattr(exception, "suggested_wait_time", 300)
         logger.warning("Rate limit%s: %s (wait=%ds)", ctx, exception, wait_time)
+        _audit_auth("rate_limit", context, wait_time=wait_time, detail=str(exception))
         raise ToolError(
             f"Rate limit detected. Wait {wait_time} seconds before trying again."
         ) from exception

@@ -246,6 +246,12 @@ def write_source_state(
         user_agent=user_agent,
     )
     _write_json(source_state_path(profile_dir), asdict(state))
+    try:
+        from linkedin_mcp_server.auth_audit import log_auth_event
+
+        log_auth_event("jar_persist", detail="source session written")
+    except Exception:
+        pass
     return state
 
 

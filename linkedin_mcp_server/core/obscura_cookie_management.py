@@ -89,6 +89,14 @@ class ObscuraCookieManager:
 
             self._update_metadata("saved_to_file")
             logger.info("Saved %d cookies to file: %s", len(cookies_list), self.cookie_file)
+            try:
+                from linkedin_mcp_server.auth_audit import log_auth_event
+
+                log_auth_event(
+                    "jar_persist", detail=f"obscura store save ({len(cookies_list)} cookies)"
+                )
+            except Exception:
+                pass
             return True
 
         except Exception as e:

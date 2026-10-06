@@ -947,6 +947,16 @@ class LinkedInExtractor:
                 # as a rate-limit verdict so the caller arms cooldown and
                 # the loop stops probing a flagged egress.
                 if "Too many redirects" in str(exc):
+                    try:
+                        from linkedin_mcp_server.auth_audit import log_auth_event
+
+                        log_auth_event(
+                            "redirect_storm",
+                            detail=f"{url} -> too many redirects",
+                            wait_time=3600,
+                        )
+                    except Exception:
+                        pass
                     raise RateLimitError(
                         "LinkedIn redirect-storm on navigation (server-side "
                         "egress or automation flag). Stopping retry cycle.",

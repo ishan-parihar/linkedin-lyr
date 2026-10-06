@@ -19,6 +19,24 @@ from linkedin_mcp_server.profile_lease import get_profile_lease
 logger = logging.getLogger(__name__)
 
 
+class _ToolCallAudit:
+    """Auth-audit wrapper applied around every tool call in on_call_tool."""
+
+    def __init__(self, tool_name: str):
+        self.tool_name = tool_name
+        self.started = time.perf_counter()
+
+    def record(self, ok: bool, error: str | None = None) -> None:
+        from linkedin_mcp_server.auth_audit import log_tool_call
+
+        log_tool_call(
+            self.tool_name,
+            ok=ok,
+            duration_s=time.perf_counter() - self.started,
+            error=error,
+        )
+
+
 class SequentialToolExecutionMiddleware(Middleware):
     """Ensure only one tool call at a time drives the shared LinkedIn browser.
 
@@ -59,6 +77,7 @@ class SequentialToolExecutionMiddleware(Middleware):
     ) -> ToolResult:
         tool_name = context.message.name
         wait_started = time.perf_counter()
+        audit = _ToolCallAudit(tool_name)
         logger.debug("Waiting for scraper lock for tool '%s'", tool_name)
         await self._report_progress(
             context,
@@ -76,7 +95,13 @@ class SequentialToolExecutionMiddleware(Middleware):
                 context,
                 message="Scraper lock acquired, starting tool",
             )
-            return await self._run_owning_the_profile(context, call_next, tool_name)
+            try:
+                result = await self._run_owning_the_profile(context, call_next, tool_name)
+                audit.record(ok=True)
+                return result
+            except Exception as exc:
+                audit.record(ok=False, error=f"{type(exc).__name__}: {exc}")
+                raise
 
     async def _run_owning_the_profile(
         self,
