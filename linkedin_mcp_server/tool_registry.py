@@ -419,20 +419,30 @@ def run_tool_direct(tool_name: str, args: list[str], use_json: bool = False) -> 
         "delete_profile_record",
     }
 
-    if not voyager_only:
-        # Pre-fetch extractor for tools that need it
-        extractor, browser, temp_profile = asyncio.run(_get_extractor_for_tool())
-        kwargs["extractor"] = extractor
-    else:
-        browser = None
-    kwargs["ctx"] = ctx
+    # ── Single-loop execution (t_017b52ac) ──────────────────────────────
+    # Previously this ran THREE separate asyncio.run() loops: one to boot
+    # the browser/extractor, one for tool.fn, one for browser.close().
+    # Playwright async objects bind their transport to the loop that
+    # created them; running tool.fn on a NEW loop after the boot loop
+    # closed leaves the driver's wakeup channel dead — the call then
+    # wedges non-deterministically (it worked for months, then began
+    # failing under load on this 2-core box). Keep every phase on ONE
+    # loop: boot + tool call + teardown inside a single runner.
+    async def _run_tool_on_one_loop():
+        nonlocal browser
+        if not voyager_only:
+            extractor, _browser, _profile = await _get_extractor_for_tool()
+            kwargs["extractor"] = extractor
+            browser = _browser
+        kwargs["ctx"] = ctx
+        return await tool.fn(**kwargs)
 
-    # Call the tool
     started = time.perf_counter()
     audit_ok = True
     audit_error = None
+    browser = None
     try:
-        result = asyncio.run(tool.fn(**kwargs))
+        result = asyncio.run(_run_tool_on_one_loop())
     except SystemExit:
         raise
     except TypeError as e:
@@ -468,6 +478,10 @@ def run_tool_direct(tool_name: str, args: list[str], use_json: bool = False) -> 
         logger.info("Cleaning up browser...")
         if browser:
             try:
+                # Note: close() runs on a fresh loop, which is safe here —
+                # no tool work is in flight and Playwright teardown is
+                # pipe/socket close, not response routing. If it wedges,
+                # the orphan alarm (installed above) still reaps the tree.
                 asyncio.run(browser.close())
                 logger.info("Browser closed successfully")
             except Exception as e:
