@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -304,8 +305,34 @@ class ObscuraBrowserManager:
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
             )
 
-            # Wait for server to start and check if it's running
-            await asyncio.sleep(5)
+            # Wait for the server to be READY, not just spawned (t_017b52ac).
+            # The old blind sleep(5) raced the engine init under load: on this
+            # 2-core box obscura's engine can take >5s to accept CDP sessions,
+            # and commands sent before readiness are deferred into a queue that
+            # a never-completing init nav never releases — every tool then
+            # wedged until the 480s supervisor wall. Poll /json/version until
+            # the HTTP surface answers, then give the WS surface a short grace.
+            _ready_deadline = time.monotonic() + 30.0
+            _ready = False
+            while time.monotonic() < _ready_deadline:
+                if self._obscura_process.poll() is not None:
+                    break
+                try:
+                    import urllib.request
+                    with urllib.request.urlopen(
+                        f"http://127.0.0.1:{self.cdp_port}/json/version", timeout=2
+                    ) as _resp:
+                        if _resp.status == 200:
+                            _ready = True
+                            break
+                except Exception:
+                    await asyncio.sleep(0.5)
+            if _ready:
+                await asyncio.sleep(1.0)  # WS surface grace after HTTP ready
+            else:
+                logger.warning(
+                    "Obscura HTTP readiness not reached in 30s; continuing best-effort"
+                )
 
             if self._obscura_process.poll() is not None:
                 stdout, stderr = self._obscura_process.communicate()
