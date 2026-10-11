@@ -430,12 +430,24 @@ def run_tool_direct(tool_name: str, args: list[str], use_json: bool = False) -> 
     # loop: boot + tool call + teardown inside a single runner.
     async def _run_tool_on_one_loop():
         nonlocal browser
-        if not voyager_only:
-            extractor, _browser, _profile = await _get_extractor_for_tool()
-            kwargs["extractor"] = extractor
-            browser = _browser
-        kwargs["ctx"] = ctx
-        return await tool.fn(**kwargs)
+        try:
+            if not voyager_only:
+                extractor, _browser, _profile = await _get_extractor_for_tool()
+                kwargs["extractor"] = extractor
+                browser = _browser
+            kwargs["ctx"] = ctx
+            return await tool.fn(**kwargs)
+        finally:
+            # Close the browser on the SAME loop that booted it. A fresh
+            # loop for close() wedges for the same cross-loop reason as the
+            # tool call did (t_017b52ac): the driver's wakeup channel is
+            # bound to the boot loop's selector.
+            if browser is not None:
+                try:
+                    await browser.close()
+                    logger.info("Browser closed successfully")
+                except Exception as e:
+                    logger.warning("Failed to close browser: %s", e)
 
     started = time.perf_counter()
     audit_ok = True
@@ -475,17 +487,8 @@ def run_tool_direct(tool_name: str, args: list[str], use_json: bool = False) -> 
         except Exception:
             pass
         # Cleanup browser only (main profile directory is not cleaned up)
-        logger.info("Cleaning up browser...")
-        if browser:
-            try:
-                # Note: close() runs on a fresh loop, which is safe here —
-                # no tool work is in flight and Playwright teardown is
-                # pipe/socket close, not response routing. If it wedges,
-                # the orphan alarm (installed above) still reaps the tree.
-                asyncio.run(browser.close())
-                logger.info("Browser closed successfully")
-            except Exception as e:
-                logger.warning("Failed to close browser: %s", e)
+        # Browser cleanup already ran inside the single-loop runner above
+        # (same-loop close, t_017b52ac). Nothing further to do here.
 
     # Output
     logger.info("Outputting result...")
