@@ -267,6 +267,22 @@ class ObscuraBrowserManager:
                 "--stealth",
                 "--quiet",
             ]
+            # t_017b52ac: obscura's engine enforces an INTERNAL Page.navigate
+            # deadline (default 30s, OBSCURA_NAV_TIMEOUT_MS). LinkedIn's
+            # /messaging/ SPA over the home SOCKS tunnel routinely needs
+            # 37-80s to domcontentloaded — the default deadline turned every
+            # search_conversations navigation into a Network error, and the
+            # extractor's retry-then-continue path wedged the tool until the
+            # 480s supervisor wall (observed Oct 4 + Oct 11). Forward the
+            # navigation budget the caller already configured
+            # (LINKEDIN_NAV_TIMEOUT_MS) to the engine so both layers agree.
+            _nav_ms = os.environ.get("OBSCURA_NAV_TIMEOUT_MS", "").strip() or os.environ.get(
+                "LINKEDIN_NAV_TIMEOUT_MS", ""
+            ).strip()
+            if _nav_ms and _nav_ms.isdigit():
+                # Popen below inherits os.environ, so the engine deadline
+                # matches the caller's navigation budget (t_017b52ac).
+                os.environ["OBSCURA_NAV_TIMEOUT_MS"] = _nav_ms
             # Route the browser's own traffic through the configured proxy
             # (e.g. home residential SOCKS tunnel — see proxy.env). Obscura
             # takes the proxy at the server level, not per-context.
