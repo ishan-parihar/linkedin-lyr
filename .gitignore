@@ -212,3 +212,4 @@ scripts/snapshot_dumps/
 
 .claude/settings.json
 .gemini/settings.json
+.claude/
