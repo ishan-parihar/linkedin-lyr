@@ -213,3 +213,8 @@ scripts/snapshot_dumps/
 .claude/settings.json
 .gemini/settings.json
 .claude/
+
+# genome runtime state (locks, temp files, recon tokens, read marks)
+*.genome-lock
+*.genome-tmp
+.genome/
