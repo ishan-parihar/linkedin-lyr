@@ -10,6 +10,9 @@ from linkedin_mcp_server.config.schema import (
     DEFAULT_BROWSER_IDLE_TIMEOUT_SECONDS,
     DEFAULT_BROWSER_MIN_HOLD_SECONDS,
     DEFAULT_BROWSER_WAIT_SECONDS,
+    DEFAULT_LOGIN_INLINE_WAIT_SECONDS,
+    DEFAULT_LOGIN_TIMEOUT_SECONDS,
+    DEFAULT_TOOL_TIMEOUT_SECONDS,
     MAX_BROWSER_WAIT_SECONDS,
     MAX_LOGIN_INLINE_WAIT_SECONDS,
     ServerConfig,
@@ -23,8 +26,8 @@ class TestBrowserConfig:
         assert config.headless is True
         assert config.default_timeout == 5000
         assert config.user_data_dir == "~/.linkedin-lyr/profile"
-        assert config.login_timeout_seconds == 1800.0
-        assert config.login_inline_wait_seconds == 25.0
+        assert config.login_timeout_seconds == DEFAULT_LOGIN_TIMEOUT_SECONDS
+        assert config.login_inline_wait_seconds == DEFAULT_LOGIN_INLINE_WAIT_SECONDS
         assert config.auto_import_from_browser is None
         assert config.eager_full_chromium is False
 
@@ -179,7 +182,7 @@ class TestServerConfig:
         config = ServerConfig()
         assert config.transport == "stdio"
         assert config.port == 8000
-        assert config.tool_timeout_seconds == 180.0
+        assert config.tool_timeout_seconds == DEFAULT_TOOL_TIMEOUT_SECONDS
 
     def test_validate_passes(self):
         ServerConfig().validate()  # No error
@@ -825,9 +828,14 @@ class TestImportFromBrowserValidation:
     def test_auto_passes(self):
         ServerConfig(import_from_browser="auto").validate()  # no error
 
-    def test_invalid_value_raises(self):
-        with pytest.raises(ConfigurationError, match="not supported"):
-            ServerConfig(import_from_browser="firefox").validate()
+    def test_an_unknown_browser_is_not_a_configuration_error(self):
+        """The allowlist check was removed in 4d27062.
+
+        browser_cookie3 resolves the browser names itself and reports what it
+        cannot find, so rejecting the value at validation time only refused a
+        name the extractor understands.
+        """
+        ServerConfig(import_from_browser="firefox").validate()  # no error
 
 
 class TestProxyConfig:

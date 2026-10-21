@@ -44,7 +44,9 @@ def _patch_login_deps(
 ) -> None:
     """Patch all interactive_login dependencies in one place."""
     monkeypatch.setattr("linkedin_mcp_server.setup.get_config", lambda: config or AppConfig())
-    monkeypatch.setattr("linkedin_mcp_server.setup.BrowserManager", browser_factory)
+    # setup.py builds an ObscuraBrowserManager directly; the old BrowserManager
+    # name was replaced by that in the Obscura rewrite (f963c82).
+    monkeypatch.setattr("linkedin_mcp_server.setup.ObscuraBrowserManager", browser_factory)
     monkeypatch.setattr(
         "linkedin_mcp_server.setup.resolve_remember_me_prompt",
         AsyncMock(return_value=False),

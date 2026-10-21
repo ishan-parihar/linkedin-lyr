@@ -62,15 +62,13 @@ def base_url(request: pytest.FixtureRequest) -> str:
 @pytest.fixture
 def post(base_url: str, monkeypatch: pytest.MonkeyPatch):
     """POST an initialize request through the real app, returning the status."""
-    # The lifespan starts browser setup and a handoff poller, neither of which
-    # this file is about; stubbing them keeps the request path real while the
-    # server startup stays offline.
+    # The lifespan starts browser setup, which this file is not about; stubbing
+    # it keeps the request path real while the server startup stays offline.
     import linkedin_mcp_server.server as server_module
 
     monkeypatch.setattr(server_module, "initialize_bootstrap", MagicMock())
     monkeypatch.setattr(server_module, "get_runtime_policy", MagicMock())
     monkeypatch.setattr(server_module, "start_background_browser_setup_if_needed", AsyncMock())
-    monkeypatch.setattr(server_module, "watch_for_handoff_requests", AsyncMock())
     monkeypatch.setattr(server_module, "close_browser", AsyncMock())
 
     def _post(headers: dict[str, str]) -> int:

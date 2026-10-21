@@ -119,23 +119,20 @@ async def test_get_or_create_browser_requires_source_state():
 
 
 @pytest.mark.asyncio
+@pytest.mark.asyncio
 async def test_same_runtime_uses_source_profile(tmp_path):
     _write_source_state(tmp_path, runtime_id="macos-arm64-host")
     source_browser = _make_mock_browser()
 
     with (
         patch(
-            "linkedin_mcp_server.drivers.browser.get_runtime_id",
-            return_value="macos-arm64-host",
-        ),
-        patch(
-            "linkedin_mcp_server.drivers.browser.BrowserManager",
+            "linkedin_mcp_server.drivers.browser.ObscuraBrowserManager",
             return_value=source_browser,
         ) as ctor,
         patch(
-            "linkedin_mcp_server.drivers.browser.detect_auth_barrier_quick",
+            "linkedin_mcp_server.drivers.browser._feed_auth_succeeds",
             new_callable=AsyncMock,
-            return_value=None,
+            return_value=True,
         ),
     ):
         result = await get_or_create_browser()
@@ -147,391 +144,83 @@ async def test_same_runtime_uses_source_profile(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_same_runtime_clicks_remember_me_during_feed_validation(tmp_path):
-    _write_source_state(tmp_path, runtime_id="macos-arm64-host")
-    source_browser = _make_mock_browser()
-
-    with (
-        patch(
-            "linkedin_mcp_server.drivers.browser.get_runtime_id",
-            return_value="macos-arm64-host",
-        ),
-        patch(
-            "linkedin_mcp_server.drivers.browser.BrowserManager",
-            return_value=source_browser,
-        ),
-        patch(
-            "linkedin_mcp_server.drivers.browser.resolve_remember_me_prompt",
-            new_callable=AsyncMock,
-            return_value=True,
-        ) as remember_me,
-        patch(
-            "linkedin_mcp_server.drivers.browser.detect_auth_barrier_quick",
-            new_callable=AsyncMock,
-            return_value=None,
-        ),
-    ):
-        result = await get_or_create_browser()
-
-    assert result is source_browser
-    assert source_browser.page.goto.await_count == 2
-    assert remember_me.await_count == 1
+# REMOVED test_same_runtime_clicks_remember_me_during_feed_validation
+# Removed 2026-10-21: the driver no longer resolves the remember-me prompt.
+# The retry it tested was dropped with the driver's Playwright-era auth path in
+# f963c82 (2026-07-29, AXI-compliant CLI with Playwright-free cookie import).
+# The remember-me retry now lives in the scraping extractor
+# (scraping/extractor.py, _goto_with_auth_checks), where test_scraping.py
+# covers it.
 
 
 @pytest.mark.asyncio
-async def test_feed_auth_retries_feed_after_remember_me_error_recovery():
-    browser = _make_mock_browser()
-    browser.page.goto = AsyncMock(side_effect=[Exception("net::ERR_TOO_MANY_REDIRECTS"), None])
-
-    with (
-        patch(
-            "linkedin_mcp_server.drivers.browser.resolve_remember_me_prompt",
-            new_callable=AsyncMock,
-            return_value=True,
-        ) as remember_me,
-        patch(
-            "linkedin_mcp_server.drivers.browser.detect_auth_barrier_quick",
-            new_callable=AsyncMock,
-            return_value=None,
-        ),
-    ):
-        assert await _feed_auth_succeeds(browser) is True
-
-    assert browser.page.goto.await_count == 2
-    remember_me.assert_awaited_once()
+# REMOVED test_feed_auth_retries_feed_after_remember_me_error_recovery
+# Removed 2026-10-21: the driver's feed check no longer retries through the
+# remember-me prompt. Dropped in f963c82 (2026-07-29) with the driver's
+# Playwright-era auth path; the retry now lives in the scraping extractor,
+# where test_scraping.py covers it.
 
 
 @pytest.mark.asyncio
-async def test_feed_auth_records_single_post_recovery_trace():
-    browser = _make_mock_browser()
-    browser.page.goto = AsyncMock(side_effect=[Exception("net::ERR_TOO_MANY_REDIRECTS"), None])
-
-    with (
-        patch(
-            "linkedin_mcp_server.drivers.browser.resolve_remember_me_prompt",
-            new_callable=AsyncMock,
-            return_value=True,
-        ),
-        patch(
-            "linkedin_mcp_server.drivers.browser.detect_auth_barrier_quick",
-            new_callable=AsyncMock,
-            return_value=None,
-        ),
-        patch(
-            "linkedin_mcp_server.drivers.browser.record_page_trace",
-            new_callable=AsyncMock,
-        ) as record_page_trace,
-    ):
-        assert await _feed_auth_succeeds(browser) is True
-
-    steps = [call.args[1] for call in record_page_trace.await_args_list]
-    assert "feed-after-remember-me-error-recovery" in steps
-    assert "feed-navigation-error-before-remember-me-retry" not in steps
+# REMOVED test_feed_auth_records_single_post_recovery_trace
+# Removed 2026-10-21: the driver's feed check no longer records a
+# remember-me recovery trace. Dropped in f963c82 (2026-07-29); the trace
+# steps it asserted now live in the scraping extractor.
 
 
 @pytest.mark.asyncio
-async def test_experimental_derived_runtime_reuses_matching_committed_profile(
-    tmp_path, monkeypatch
-):
-    _write_source_state(tmp_path, runtime_id="macos-arm64-host")
-    derived_profile = _write_runtime_state(tmp_path, "linux-amd64-container")
-    derived_browser = _make_mock_browser()
-    monkeypatch.setenv("LINKEDIN_EXPERIMENTAL_PERSIST_DERIVED_SESSION", "1")
-
-    with (
-        patch(
-            "linkedin_mcp_server.drivers.browser.get_runtime_id",
-            return_value="linux-amd64-container",
-        ),
-        patch(
-            "linkedin_mcp_server.drivers.browser.BrowserManager",
-            return_value=derived_browser,
-        ) as ctor,
-        patch(
-            "linkedin_mcp_server.drivers.browser.detect_auth_barrier_quick",
-            new_callable=AsyncMock,
-            return_value=None,
-        ),
-    ):
-        result = await get_or_create_browser()
-
-    assert result is derived_browser
-    assert ctor.call_args.kwargs["user_data_dir"] == derived_profile
-    derived_browser.import_cookies.assert_not_awaited()
-    derived_browser.export_storage_state.assert_not_awaited()
+# REMOVED test_experimental_derived_runtime_reuses_matching_committed_profile
+# Removed 2026-10-21: the derived-runtime profile bridge was removed in
+# f963c82 (2026-07-29). The driver now always uses the source profile; there
+# is no derived runtime to reuse, and no checkpoint commit to make.
 
 
 @pytest.mark.asyncio
-async def test_default_foreign_runtime_bridges_fresh_each_startup(tmp_path):
-    _write_source_state(tmp_path, runtime_id="macos-arm64-host", login_generation="gen-2")
-    _write_runtime_state(
-        tmp_path,
-        "linux-amd64-container",
-        source_login_generation="gen-2",
-    )
-    first_browser = _make_mock_browser()
-    first_browser.import_cookies = AsyncMock(return_value=True)
-
-    with (
-        patch(
-            "linkedin_mcp_server.drivers.browser.get_runtime_id",
-            return_value="linux-amd64-container",
-        ),
-        patch(
-            "linkedin_mcp_server.drivers.browser.BrowserManager",
-            return_value=first_browser,
-        ) as ctor,
-        patch(
-            "linkedin_mcp_server.drivers.browser.detect_auth_barrier_quick",
-            new_callable=AsyncMock,
-            return_value=None,
-        ),
-    ):
-        result = await get_or_create_browser()
-
-    expected_profile = runtime_profile_dir("linux-amd64-container", tmp_path / "profile")
-    assert result is first_browser
-    assert ctor.call_count == 1
-    assert ctor.call_args.kwargs["user_data_dir"] == expected_profile
-    first_browser.import_cookies.assert_awaited_once_with(
-        portable_cookie_path(tmp_path / "profile")
-    )
-    first_browser.export_storage_state.assert_not_awaited()
-    first_browser.close.assert_not_awaited()
-    assert not runtime_state_path("linux-amd64-container", tmp_path / "profile").exists()
+# REMOVED test_default_foreign_runtime_bridges_fresh_each_startup
+# Removed 2026-10-21: the foreign-runtime bridge was removed in f963c82
+# (2026-07-29). The driver no longer branches on the runtime id, so there is
+# no fresh bridge to build on every startup.
 
 
 @pytest.mark.asyncio
-async def test_experimental_missing_derived_runtime_bridges_and_checkpoint_commits(
-    tmp_path, monkeypatch
-):
-    _write_source_state(tmp_path, runtime_id="macos-arm64-host", login_generation="gen-2")
-    first_browser = _make_mock_browser()
-    first_browser.import_cookies = AsyncMock(return_value=True)
-    reopened_browser = _make_mock_browser()
-    monkeypatch.setenv("LINKEDIN_EXPERIMENTAL_PERSIST_DERIVED_SESSION", "1")
-
-    with (
-        patch(
-            "linkedin_mcp_server.drivers.browser.get_runtime_id",
-            return_value="linux-amd64-container",
-        ),
-        patch(
-            "linkedin_mcp_server.drivers.browser.BrowserManager",
-            side_effect=[first_browser, reopened_browser],
-        ) as ctor,
-        patch(
-            "linkedin_mcp_server.drivers.browser.detect_auth_barrier_quick",
-            new_callable=AsyncMock,
-            return_value=None,
-        ),
-    ):
-        result = await get_or_create_browser()
-
-    expected_profile = runtime_profile_dir("linux-amd64-container", tmp_path / "profile")
-    expected_storage = runtime_storage_state_path("linux-amd64-container", tmp_path / "profile")
-    assert result is reopened_browser
-    assert ctor.call_count == 2
-    assert ctor.call_args_list[0].kwargs["user_data_dir"] == expected_profile
-    assert ctor.call_args_list[1].kwargs["user_data_dir"] == expected_profile
-    first_browser.import_cookies.assert_awaited_once_with(
-        portable_cookie_path(tmp_path / "profile")
-    )
-    first_browser.export_storage_state.assert_awaited_once_with(
-        expected_storage,
-        indexed_db=True,
-    )
-    first_browser.close.assert_awaited_once()
-    runtime_state = json.loads(
-        runtime_state_path("linux-amd64-container", tmp_path / "profile").read_text()
-    )
-    assert runtime_state["source_login_generation"] == "gen-2"
-    assert runtime_state["storage_state_path"] == str(expected_storage.resolve())
+# REMOVED test_experimental_missing_derived_runtime_bridges_and_checkpoint_commits
+# Removed 2026-10-21: the derived-runtime bridge and its checkpoint commit
+# were removed in f963c82 (2026-07-29).
 
 
 @pytest.mark.asyncio
-async def test_debug_skip_checkpoint_restart_keeps_fresh_bridged_browser(tmp_path, monkeypatch):
-    _write_source_state(tmp_path, runtime_id="macos-arm64-host", login_generation="gen-2")
-    first_browser = _make_mock_browser()
-    first_browser.import_cookies = AsyncMock(return_value=True)
-    monkeypatch.setenv("LINKEDIN_EXPERIMENTAL_PERSIST_DERIVED_SESSION", "1")
-    monkeypatch.setenv("LINKEDIN_DEBUG_SKIP_CHECKPOINT_RESTART", "1")
-
-    with (
-        patch(
-            "linkedin_mcp_server.drivers.browser.get_runtime_id",
-            return_value="linux-amd64-container",
-        ),
-        patch(
-            "linkedin_mcp_server.drivers.browser.BrowserManager",
-            return_value=first_browser,
-        ) as ctor,
-        patch(
-            "linkedin_mcp_server.drivers.browser.detect_auth_barrier_quick",
-            new_callable=AsyncMock,
-            return_value=None,
-        ),
-    ):
-        result = await get_or_create_browser()
-
-    assert result is first_browser
-    assert ctor.call_count == 1
-    first_browser.import_cookies.assert_awaited_once_with(
-        portable_cookie_path(tmp_path / "profile")
-    )
-    first_browser.export_storage_state.assert_not_awaited()
-    first_browser.close.assert_not_awaited()
-    assert not runtime_state_path("linux-amd64-container", tmp_path / "profile").exists()
+# REMOVED test_debug_skip_checkpoint_restart_keeps_fresh_bridged_browser
+# Removed 2026-10-21: the checkpoint-restart path was removed in f963c82
+# (2026-07-29), so LINKEDIN_DEBUG_SKIP_CHECKPOINT_RESTART no longer has a
+# checkpoint to skip.
 
 
 @pytest.mark.asyncio
-async def test_debug_bridge_every_startup_skips_matching_committed_profile(tmp_path, monkeypatch):
-    _write_source_state(tmp_path, runtime_id="macos-arm64-host", login_generation="gen-2")
-    _write_runtime_state(
-        tmp_path,
-        "linux-amd64-container",
-        source_login_generation="gen-2",
-    )
-    first_browser = _make_mock_browser()
-    first_browser.import_cookies = AsyncMock(return_value=True)
-    monkeypatch.setenv("LINKEDIN_EXPERIMENTAL_PERSIST_DERIVED_SESSION", "1")
-    monkeypatch.setenv("LINKEDIN_DEBUG_BRIDGE_EVERY_STARTUP", "1")
-    monkeypatch.setenv("LINKEDIN_DEBUG_SKIP_CHECKPOINT_RESTART", "1")
-
-    with (
-        patch(
-            "linkedin_mcp_server.drivers.browser.get_runtime_id",
-            return_value="linux-amd64-container",
-        ),
-        patch(
-            "linkedin_mcp_server.drivers.browser.BrowserManager",
-            return_value=first_browser,
-        ) as ctor,
-        patch(
-            "linkedin_mcp_server.drivers.browser.detect_auth_barrier_quick",
-            new_callable=AsyncMock,
-            return_value=None,
-        ),
-    ):
-        result = await get_or_create_browser()
-
-    expected_profile = runtime_profile_dir("linux-amd64-container", tmp_path / "profile")
-    assert result is first_browser
-    assert ctor.call_count == 1
-    assert ctor.call_args.kwargs["user_data_dir"] == expected_profile
-    first_browser.import_cookies.assert_awaited_once_with(
-        portable_cookie_path(tmp_path / "profile")
-    )
-    first_browser.export_storage_state.assert_not_awaited()
+# REMOVED test_debug_bridge_every_startup_skips_matching_committed_profile
+# Removed 2026-10-21: the derived-runtime bridge was removed in f963c82
+# (2026-07-29), so LINKEDIN_DEBUG_BRIDGE_EVERY_STARTUP no longer has a
+# committed profile to skip.
 
 
 @pytest.mark.asyncio
-async def test_debug_bridge_cookie_set_flows_through_foreign_runtime_bridge(tmp_path, monkeypatch):
-    _write_source_state(tmp_path, runtime_id="macos-arm64-host", login_generation="gen-2")
-    first_browser = _make_mock_browser()
-    first_browser.import_cookies = AsyncMock(return_value=True)
-    monkeypatch.setenv("LINKEDIN_DEBUG_BRIDGE_COOKIE_SET", "bridge_core")
-
-    with (
-        patch(
-            "linkedin_mcp_server.drivers.browser.get_runtime_id",
-            return_value="linux-amd64-container",
-        ),
-        patch(
-            "linkedin_mcp_server.drivers.browser.BrowserManager",
-            return_value=first_browser,
-        ),
-        patch(
-            "linkedin_mcp_server.drivers.browser.detect_auth_barrier_quick",
-            new_callable=AsyncMock,
-            return_value=None,
-        ),
-    ):
-        await get_or_create_browser()
-
-    first_browser.import_cookies.assert_awaited_once_with(
-        portable_cookie_path(tmp_path / "profile")
-    )
+# REMOVED test_debug_bridge_cookie_set_flows_through_foreign_runtime_bridge
+# Removed 2026-10-21: the foreign-runtime bridge was removed in f963c82
+# (2026-07-29), so there is no bridge for a cookie set to flow through.
 
 
 @pytest.mark.asyncio
-async def test_experimental_stale_derived_runtime_rebuilds_from_new_generation(
-    tmp_path, monkeypatch
-):
-    _write_source_state(tmp_path, runtime_id="macos-arm64-host", login_generation="gen-3")
-    stale_profile = _write_runtime_state(
-        tmp_path,
-        "linux-amd64-container",
-        source_login_generation="old-gen",
-    )
-    old_marker = stale_profile / "stale.txt"
-    old_marker.write_text("stale")
-    first_browser = _make_mock_browser()
-    first_browser.import_cookies = AsyncMock(return_value=True)
-    reopened_browser = _make_mock_browser()
-    monkeypatch.setenv("LINKEDIN_EXPERIMENTAL_PERSIST_DERIVED_SESSION", "1")
-
-    with (
-        patch(
-            "linkedin_mcp_server.drivers.browser.get_runtime_id",
-            return_value="linux-amd64-container",
-        ),
-        patch(
-            "linkedin_mcp_server.drivers.browser.BrowserManager",
-            side_effect=[first_browser, reopened_browser],
-        ),
-        patch(
-            "linkedin_mcp_server.drivers.browser.detect_auth_barrier_quick",
-            new_callable=AsyncMock,
-            return_value=None,
-        ),
-    ):
-        await get_or_create_browser()
-
-    assert not old_marker.exists()
-    runtime_state = json.loads(
-        runtime_state_path("linux-amd64-container", tmp_path / "profile").read_text()
-    )
-    assert runtime_state["source_login_generation"] == "gen-3"
+# REMOVED test_experimental_stale_derived_runtime_rebuilds_from_new_generation
+# Removed 2026-10-21: the derived-runtime profile was removed in f963c82
+# (2026-07-29); there is no runtime profile to rebuild from a new generation.
 
 
 @pytest.mark.asyncio
-async def test_experimental_matching_derived_runtime_failure_rebridges_from_source(
-    tmp_path, monkeypatch
-):
-    _write_source_state(tmp_path, runtime_id="macos-arm64-host")
-    _write_runtime_state(tmp_path, "linux-amd64-container")
-    invalid_browser = _make_mock_browser()
-    bridged_browser = _make_mock_browser()
-    bridged_browser.import_cookies = AsyncMock(return_value=True)
-    monkeypatch.setenv("LINKEDIN_EXPERIMENTAL_PERSIST_DERIVED_SESSION", "1")
-    monkeypatch.setenv("LINKEDIN_DEBUG_SKIP_CHECKPOINT_RESTART", "1")
-
-    with (
-        patch(
-            "linkedin_mcp_server.drivers.browser.get_runtime_id",
-            return_value="linux-amd64-container",
-        ),
-        patch(
-            "linkedin_mcp_server.drivers.browser.BrowserManager",
-            side_effect=[invalid_browser, bridged_browser],
-        ),
-        patch(
-            "linkedin_mcp_server.drivers.browser.detect_auth_barrier_quick",
-            new_callable=AsyncMock,
-            side_effect=["login title: linkedin login", None],
-        ),
-    ):
-        result = await get_or_create_browser()
-
-    assert result is bridged_browser
-    invalid_browser.close.assert_awaited_once()
-    invalid_browser.import_cookies.assert_not_awaited()
-    bridged_browser.import_cookies.assert_awaited_once_with(
-        portable_cookie_path(tmp_path / "profile")
-    )
+# REMOVED test_experimental_matching_derived_runtime_failure_rebridges_from_source
+# Removed 2026-10-21: the derived-runtime profile and its re-bridge were
+# removed in f963c82 (2026-07-29).
 
 
+@pytest.mark.asyncio
 @pytest.mark.asyncio
 async def test_same_runtime_start_failure_closes_browser(tmp_path):
     _write_source_state(tmp_path, runtime_id="macos-arm64-host")
@@ -540,11 +229,7 @@ async def test_same_runtime_start_failure_closes_browser(tmp_path):
 
     with (
         patch(
-            "linkedin_mcp_server.drivers.browser.get_runtime_id",
-            return_value="macos-arm64-host",
-        ),
-        patch(
-            "linkedin_mcp_server.drivers.browser.BrowserManager",
+            "linkedin_mcp_server.drivers.browser.ObscuraBrowserManager",
             return_value=source_browser,
         ),
         pytest.raises(RuntimeError, match="start failed"),
@@ -555,129 +240,33 @@ async def test_same_runtime_start_failure_closes_browser(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_default_foreign_runtime_start_failure_closes_browser(tmp_path):
-    _write_source_state(tmp_path, runtime_id="macos-arm64-host")
-    first_browser = _make_mock_browser()
-    first_browser.start = AsyncMock(side_effect=RuntimeError("start failed"))
-
-    with (
-        patch(
-            "linkedin_mcp_server.drivers.browser.get_runtime_id",
-            return_value="linux-amd64-container",
-        ),
-        patch(
-            "linkedin_mcp_server.drivers.browser.BrowserManager",
-            return_value=first_browser,
-        ),
-        pytest.raises(RuntimeError, match="start failed"),
-    ):
-        await get_or_create_browser()
-
-    first_browser.close.assert_awaited_once()
-    assert not runtime_profile_dir("linux-amd64-container", tmp_path / "profile").exists()
-    assert not runtime_state_path("linux-amd64-container", tmp_path / "profile").exists()
+# REMOVED test_default_foreign_runtime_start_failure_closes_browser
+# Removed 2026-10-21: the foreign-runtime bridge was removed in f963c82
+# (2026-07-29). The plain start-failure teardown is still covered by
+# test_same_runtime_start_failure_closes_browser.
 
 
 @pytest.mark.asyncio
-async def test_experimental_checkpoint_reopen_failure_clears_runtime_dir(tmp_path, monkeypatch):
-    from linkedin_mcp_server.core import AuthenticationError
-
-    _write_source_state(tmp_path, runtime_id="macos-arm64-host", login_generation="gen-2")
-    first_browser = _make_mock_browser()
-    first_browser.import_cookies = AsyncMock(return_value=True)
-    reopened_browser = _make_mock_browser()
-    monkeypatch.setenv("LINKEDIN_EXPERIMENTAL_PERSIST_DERIVED_SESSION", "1")
-
-    barrier_mock = AsyncMock(side_effect=[None, "checkpoint"])
-    with (
-        patch(
-            "linkedin_mcp_server.drivers.browser.get_runtime_id",
-            return_value="linux-amd64-container",
-        ),
-        patch(
-            "linkedin_mcp_server.drivers.browser.BrowserManager",
-            side_effect=[first_browser, reopened_browser],
-        ),
-        patch(
-            "linkedin_mcp_server.drivers.browser.detect_auth_barrier_quick",
-            barrier_mock,
-        ),
-        pytest.raises(AuthenticationError),
-    ):
-        await get_or_create_browser()
-
-    assert not runtime_state_path("linux-amd64-container", tmp_path / "profile").exists()
-    assert not runtime_profile_dir("linux-amd64-container", tmp_path / "profile").exists()
-    reopened_browser.close.assert_awaited_once()
+# REMOVED test_experimental_checkpoint_reopen_failure_clears_runtime_dir
+# Removed 2026-10-21: the derived-runtime checkpoint reopen was removed in
+# f963c82 (2026-07-29); there is no runtime dir to clear.
 
 
 @pytest.mark.asyncio
-async def test_experimental_reopen_start_failure_closes_reopened_browser(tmp_path, monkeypatch):
-    _write_source_state(tmp_path, runtime_id="macos-arm64-host", login_generation="gen-2")
-    first_browser = _make_mock_browser()
-    first_browser.import_cookies = AsyncMock(return_value=True)
-    reopened_browser = _make_mock_browser()
-    reopened_browser.start = AsyncMock(side_effect=RuntimeError("reopen failed"))
-    monkeypatch.setenv("LINKEDIN_EXPERIMENTAL_PERSIST_DERIVED_SESSION", "1")
-
-    with (
-        patch(
-            "linkedin_mcp_server.drivers.browser.get_runtime_id",
-            return_value="linux-amd64-container",
-        ),
-        patch(
-            "linkedin_mcp_server.drivers.browser.BrowserManager",
-            side_effect=[first_browser, reopened_browser],
-        ),
-        patch(
-            "linkedin_mcp_server.drivers.browser.detect_auth_barrier_quick",
-            new_callable=AsyncMock,
-            return_value=None,
-        ),
-        pytest.raises(RuntimeError, match="reopen failed"),
-    ):
-        await get_or_create_browser()
-
-    reopened_browser.close.assert_awaited_once()
-    assert not runtime_state_path("linux-amd64-container", tmp_path / "profile").exists()
-    assert not runtime_profile_dir("linux-amd64-container", tmp_path / "profile").exists()
+# REMOVED test_experimental_reopen_start_failure_closes_reopened_browser
+# Removed 2026-10-21: the derived-runtime checkpoint reopen was removed in
+# f963c82 (2026-07-29).
 
 
 @pytest.mark.asyncio
-async def test_experimental_bridge_validation_failure_before_commit_clears_runtime_dir(
-    tmp_path, monkeypatch
-):
-    from linkedin_mcp_server.core import AuthenticationError
-
-    _write_source_state(tmp_path, runtime_id="macos-arm64-host", login_generation="gen-2")
-    first_browser = _make_mock_browser()
-    first_browser.import_cookies = AsyncMock(return_value=True)
-    monkeypatch.setenv("LINKEDIN_EXPERIMENTAL_PERSIST_DERIVED_SESSION", "1")
-
-    barrier_mock = AsyncMock(return_value="login title: linkedin login")
-    with (
-        patch(
-            "linkedin_mcp_server.drivers.browser.get_runtime_id",
-            return_value="linux-amd64-container",
-        ),
-        patch(
-            "linkedin_mcp_server.drivers.browser.BrowserManager",
-            return_value=first_browser,
-        ),
-        patch(
-            "linkedin_mcp_server.drivers.browser.detect_auth_barrier_quick",
-            barrier_mock,
-        ),
-        pytest.raises(AuthenticationError),
-    ):
-        await get_or_create_browser()
-
-    assert not runtime_state_path("linux-amd64-container", tmp_path / "profile").exists()
-    assert not runtime_profile_dir("linux-amd64-container", tmp_path / "profile").exists()
+# REMOVED test_experimental_bridge_validation_failure_before_commit_clears_runtime_dir
+# Removed 2026-10-21: the derived-runtime bridge and its commit were removed
+# in f963c82 (2026-07-29); there is no runtime dir to clear.
 
 
 @pytest.mark.asyncio
-async def test_validate_imported_cookies_returns_feed_result(tmp_path, monkeypatch):
+@pytest.mark.asyncio
+async def test_validate_imported_cookies_returns_feed_result(tmp_path):
     browser = _make_mock_browser()
     browser.import_cookies = AsyncMock(return_value=True)
     cookie_path = tmp_path / "cookies.json"
@@ -685,7 +274,7 @@ async def test_validate_imported_cookies_returns_feed_result(tmp_path, monkeypat
 
     with (
         patch(
-            "linkedin_mcp_server.drivers.browser.BrowserManager",
+            "linkedin_mcp_server.drivers.browser.ObscuraBrowserManager",
             return_value=browser,
         ),
         patch(
@@ -698,10 +287,13 @@ async def test_validate_imported_cookies_returns_feed_result(tmp_path, monkeypat
 
     assert result is True
     feed_ok.assert_awaited_once()
-    browser.import_cookies.assert_awaited_once_with(cookie_path, preset_name="bridge_core")
+    # The bridge preset was dropped with the foreign-runtime bridge in
+    # f963c82 (2026-07-29); the cookie file is imported as it stands.
+    browser.import_cookies.assert_awaited_once_with(cookie_path)
     browser.close.assert_awaited_once()
 
 
+@pytest.mark.asyncio
 @pytest.mark.asyncio
 async def test_validate_imported_cookies_returns_false_when_feed_auth_fails(
     tmp_path,
@@ -715,7 +307,7 @@ async def test_validate_imported_cookies_returns_false_when_feed_auth_fails(
 
     with (
         patch(
-            "linkedin_mcp_server.drivers.browser.BrowserManager",
+            "linkedin_mcp_server.drivers.browser.ObscuraBrowserManager",
             return_value=browser,
         ),
         patch(
@@ -732,6 +324,7 @@ async def test_validate_imported_cookies_returns_false_when_feed_auth_fails(
 
 
 @pytest.mark.asyncio
+@pytest.mark.asyncio
 async def test_validate_imported_cookies_short_circuits_on_import_failure(
     tmp_path,
 ):
@@ -742,7 +335,7 @@ async def test_validate_imported_cookies_short_circuits_on_import_failure(
 
     with (
         patch(
-            "linkedin_mcp_server.drivers.browser.BrowserManager",
+            "linkedin_mcp_server.drivers.browser.ObscuraBrowserManager",
             return_value=browser,
         ),
         patch(
@@ -759,6 +352,7 @@ async def test_validate_imported_cookies_short_circuits_on_import_failure(
 
 
 @pytest.mark.asyncio
+@pytest.mark.asyncio
 async def test_validate_imported_cookies_closes_browser_on_error(tmp_path):
     browser = _make_mock_browser()
     browser.page.goto = AsyncMock(side_effect=RuntimeError("nav boom"))
@@ -767,7 +361,7 @@ async def test_validate_imported_cookies_closes_browser_on_error(tmp_path):
 
     with (
         patch(
-            "linkedin_mcp_server.drivers.browser.BrowserManager",
+            "linkedin_mcp_server.drivers.browser.ObscuraBrowserManager",
             return_value=browser,
         ),
         pytest.raises(RuntimeError, match="nav boom"),
@@ -778,6 +372,7 @@ async def test_validate_imported_cookies_closes_browser_on_error(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.asyncio
 async def test_validate_uses_local_manager_not_singleton(tmp_path):
     browser = _make_mock_browser()
     browser.import_cookies = AsyncMock(return_value=True)
@@ -785,9 +380,14 @@ async def test_validate_uses_local_manager_not_singleton(tmp_path):
     cookie_path.write_text(json.dumps([{"name": "li_at"}]))
 
     reset_browser_for_testing()
+    # reset_browser_for_testing() clears _browser but not the cookie-export
+    # path, so the path is compared against its value before the call rather
+    # than against None: the point is that the import validator leaves the
+    # singleton alone, whatever else ran before it.
+    export_path_before = browser_module._browser_cookie_export_path
     with (
         patch(
-            "linkedin_mcp_server.drivers.browser.BrowserManager",
+            "linkedin_mcp_server.drivers.browser.ObscuraBrowserManager",
             return_value=browser,
         ),
         patch(
@@ -800,11 +400,12 @@ async def test_validate_uses_local_manager_not_singleton(tmp_path):
 
     # The singleton globals must remain untouched by the import validator.
     assert browser_module._browser is None
-    assert browser_module._browser_cookie_export_path is None
+    assert browser_module._browser_cookie_export_path is export_path_before
 
 
 @pytest.mark.asyncio
-async def test_concurrent_get_or_create_creates_single_browser(monkeypatch):
+@pytest.mark.asyncio
+async def test_concurrent_get_or_create_creates_single_browser(monkeypatch, tmp_path):
     """Two concurrent callers (a tool call and a background caller resuming at
     startup) must not both launch a browser against the same profile."""
     import asyncio
@@ -814,6 +415,8 @@ async def test_concurrent_get_or_create_creates_single_browser(monkeypatch):
 
     # Clean starting state regardless of test order; auto-restored at teardown.
     monkeypatch.setattr(browser_module, "_browser", None)
+    # The driver refuses to launch without a profile on disk.
+    (tmp_path / "profile").mkdir(parents=True, exist_ok=True)
 
     calls = {"n": 0}
     sentinel = cast(Any, object())
@@ -824,7 +427,9 @@ async def test_concurrent_get_or_create_creates_single_browser(monkeypatch):
         browser_module._browser = sentinel
         return sentinel
 
-    monkeypatch.setattr(browser_module, "_create_browser", fake_create)
+    # get_or_create_browser() takes the create lock and calls the locked
+    # creator; the unlocked wrapper is only used elsewhere.
+    monkeypatch.setattr(browser_module, "_create_browser_locked", fake_create)
     first, second = await asyncio.gather(get_or_create_browser(), get_or_create_browser())
     assert first is sentinel and second is sentinel
     assert calls["n"] == 1
@@ -842,11 +447,12 @@ class TestProxyLaunchOptions:
         browser_module.get_config().browser.proxy_username = "user"
         browser_module.get_config().browser.proxy_password = "pw"
         launch_options, _ = browser_module._launch_options()
-        assert launch_options["proxy"] == {
-            "server": "http://gate.example:7000",
-            "username": "user",
-            "password": "pw",
-        }
+        # The scraping browser is an Obscura one, and its launch option carries
+        # the address only. Credentials are a Patchright launch option and
+        # reach the --login browser through config.browser.proxy_settings();
+        # the Obscura scrape path has no credential field, so asserting them
+        # here would pin a shape the source does not have.
+        assert launch_options["proxy"] == {"server": "http://gate.example:7000"}
 
     def test_credentials_are_not_logged(self, caplog):
         browser_module.get_config().browser.proxy_server = "http://gate.example:7000"
@@ -865,17 +471,13 @@ class TestProxyLaunchOptions:
 
         with (
             patch(
-                "linkedin_mcp_server.drivers.browser.get_runtime_id",
-                return_value="macos-arm64-host",
-            ),
-            patch(
-                "linkedin_mcp_server.drivers.browser.BrowserManager",
+                "linkedin_mcp_server.drivers.browser.ObscuraBrowserManager",
                 return_value=source_browser,
             ) as ctor,
             patch(
-                "linkedin_mcp_server.drivers.browser.detect_auth_barrier_quick",
+                "linkedin_mcp_server.drivers.browser._feed_auth_succeeds",
                 new_callable=AsyncMock,
-                return_value=None,
+                return_value=True,
             ),
         ):
             await get_or_create_browser()
@@ -906,36 +508,11 @@ class TestProxyFailureIsNotAnAuthFailure:
         with pytest.raises(ProxyConnectionError, match="gate.example"):
             await _feed_auth_succeeds(browser)
 
-    @pytest.mark.asyncio
-    async def test_proxy_error_survives_the_remember_me_retry(self, monkeypatch):
-        # The recursive retries run inside the same try, so an inner
-        # ProxyConnectionError would otherwise be caught by the outer except.
-        browser_module.get_config().browser.proxy_server = "http://gate.example:7000"
-        monkeypatch.setattr(
-            "linkedin_mcp_server.config.get_config",
-            browser_module.get_config,
-        )
-        browser = _make_mock_browser()
-        # The first navigation must succeed so the remember-me branch is taken
-        # and _feed_auth_succeeds calls itself; only the retry hits the proxy
-        # fault. Failing on the first call would never reach the recursion and
-        # would silently duplicate the test above.
-        browser.page.goto = AsyncMock(
-            side_effect=[None, Exception("net::ERR_TUNNEL_CONNECTION_FAILED")]
-        )
-
-        with (
-            patch(
-                "linkedin_mcp_server.drivers.browser.resolve_remember_me_prompt",
-                new_callable=AsyncMock,
-                return_value=True,
-            ) as resolver,
-            pytest.raises(ProxyConnectionError),
-        ):
-            await _feed_auth_succeeds(browser)
-
-        assert browser.page.goto.await_count == 2
-        resolver.assert_awaited()
+# REMOVED test_proxy_error_survives_the_remember_me_retry
+# Removed 2026-10-21: the driver's feed check no longer retries through the
+# remember-me prompt (removed in f963c82, 2026-07-29), so there is no inner
+# retry for a proxy error to survive. The plain proxy-error case is still
+# covered by test_proxy_navigation_error_raises_proxy_error.
 
     @pytest.mark.asyncio
     async def test_proxy_password_is_not_in_the_message(self, monkeypatch):
@@ -964,12 +541,7 @@ class TestProxyFailureIsNotAnAuthFailure:
         browser = _make_mock_browser()
         browser.page.goto = AsyncMock(side_effect=Exception("net::ERR_TOO_MANY_REDIRECTS"))
 
-        with patch(
-            "linkedin_mcp_server.drivers.browser.resolve_remember_me_prompt",
-            new_callable=AsyncMock,
-            return_value=False,
-        ):
-            assert await _feed_auth_succeeds(browser) is False
+        assert await _feed_auth_succeeds(browser) is False
 
 
 class TestAmbiguousProxyFailureKeepsTheSession:
@@ -988,14 +560,7 @@ class TestAmbiguousProxyFailureKeepsTheSession:
         browser = _make_mock_browser()
         browser.page.goto = AsyncMock(side_effect=Exception("Page.goto: Timeout 30000ms exceeded."))
 
-        with (
-            patch(
-                "linkedin_mcp_server.drivers.browser.resolve_remember_me_prompt",
-                new_callable=AsyncMock,
-                return_value=False,
-            ),
-            pytest.raises(ProxyConnectionError, match="gate.example"),
-        ):
+        with pytest.raises(ProxyConnectionError, match="gate.example"):
             await _feed_auth_succeeds(browser)
 
     @pytest.mark.asyncio
@@ -1006,61 +571,17 @@ class TestAmbiguousProxyFailureKeepsTheSession:
         browser = _make_mock_browser()
         browser.page.goto = AsyncMock(side_effect=Exception("Page.goto: Timeout 30000ms exceeded."))
 
-        with patch(
-            "linkedin_mcp_server.drivers.browser.resolve_remember_me_prompt",
-            new_callable=AsyncMock,
-            return_value=False,
-        ):
-            assert await _feed_auth_succeeds(browser) is False
+        assert await _feed_auth_succeeds(browser) is False
 
-    @pytest.mark.asyncio
-    async def test_an_auth_barrier_under_a_proxy_still_reports_false(self, monkeypatch):
-        # A barrier means a page loaded and LinkedIn refused it, which is real
-        # evidence about the session, so the proxy must not mask it.
-        browser_module.get_config().browser.proxy_server = "http://gate.example:7000"
-        monkeypatch.setattr("linkedin_mcp_server.config.get_config", browser_module.get_config)
-        browser = _make_mock_browser()
+# REMOVED test_an_auth_barrier_under_a_proxy_still_reports_false
+# Removed 2026-10-21: the driver no longer reads an auth barrier; the
+# barrier check moved to the scraping extractor in f963c82 (2026-07-29).
+# The driver's feed check reports the Obscura session state, so a barrier
+# cannot be distinguished here any more.
 
-        with (
-            patch(
-                "linkedin_mcp_server.drivers.browser.resolve_remember_me_prompt",
-                new_callable=AsyncMock,
-                return_value=False,
-            ),
-            patch(
-                "linkedin_mcp_server.drivers.browser.detect_auth_barrier_quick",
-                new_callable=AsyncMock,
-                return_value="login_wall",
-            ),
-        ):
-            assert await _feed_auth_succeeds(browser) is False
-
-    @pytest.mark.asyncio
-    async def test_a_barrier_behind_a_failed_navigation_still_reports_false(self, monkeypatch):
-        # The sharp case: an expired session redirects /feed/ to /login and the
-        # load event then times out. A URL and title survive that, so the
-        # barrier is real evidence and must outrank the proxy explanation --
-        # otherwise the derived-runtime re-bridge, which only catches
-        # AuthenticationError, is skipped for a genuinely dead session.
-        browser_module.get_config().browser.proxy_server = "http://gate.example:7000"
-        monkeypatch.setattr("linkedin_mcp_server.config.get_config", browser_module.get_config)
-        browser = _make_mock_browser()
-        browser.page.goto = AsyncMock(side_effect=Exception("Page.goto: Timeout 30000ms exceeded."))
-        browser.page.url = "https://www.linkedin.com/login"
-
-        with (
-            patch(
-                "linkedin_mcp_server.drivers.browser.resolve_remember_me_prompt",
-                new_callable=AsyncMock,
-                return_value=False,
-            ),
-            patch(
-                "linkedin_mcp_server.drivers.browser.detect_auth_barrier_quick",
-                new_callable=AsyncMock,
-                return_value="auth blocker URL: /login",
-            ),
-        ):
-            assert await _feed_auth_succeeds(browser) is False
+# REMOVED test_a_barrier_behind_a_failed_navigation_still_reports_false
+# Removed 2026-10-21: the driver no longer reads an auth barrier; the
+# barrier check moved to the scraping extractor in f963c82 (2026-07-29).
 
 
 class TestFeedFailureDoesNotLeakCredentials:
@@ -1091,16 +612,6 @@ class TestFeedFailureDoesNotLeakCredentials:
             traces.append(str(extra))
 
         with (
-            patch(
-                "linkedin_mcp_server.drivers.browser.resolve_remember_me_prompt",
-                new_callable=AsyncMock,
-                return_value=False,
-            ),
-            patch(
-                "linkedin_mcp_server.drivers.browser.detect_auth_barrier_quick",
-                new_callable=AsyncMock,
-                return_value=None,
-            ),
             patch("linkedin_mcp_server.drivers.browser.record_page_trace", capture_trace),
             caplog.at_level(logging.WARNING),
             pytest.raises(ProxyConnectionError),

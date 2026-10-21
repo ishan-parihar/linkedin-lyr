@@ -271,7 +271,7 @@ class TestIdleOwnerHandsOver:
     and get a busy error while the owner sat doing nothing.
     """
 
-    async def test_poller_releases_the_profile_to_a_waiter(
+    async def test_handoff_check_releases_the_profile_to_a_waiter(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         import asyncio
@@ -279,7 +279,6 @@ class TestIdleOwnerHandsOver:
         from linkedin_mcp_server.drivers import browser as browser_module
 
         monkeypatch.setattr("sys.argv", ["linkedin-mcp-server"])
-        monkeypatch.setattr(browser_module, "_HANDOFF_POLL_INTERVAL_SECONDS", 0.05)
 
         lease = get_profile_lease(tmp_path / "profile")
         assert lease.try_acquire()
@@ -297,7 +296,6 @@ class TestIdleOwnerHandsOver:
             ),
             patch.object(browser_module, "get_profile_lease", return_value=lease),
         ):
-            watcher = asyncio.create_task(browser_module.watch_for_handoff_requests())
             waiter = subprocess.Popen(
                 [
                     sys.executable,
@@ -316,17 +314,26 @@ class TestIdleOwnerHandsOver:
             try:
                 _await_line(waiter, "ANNOUNCED")
 
-                # No tool call happens here: only the poller can notice.
-                deadline = time.monotonic() + 5
-                while time.monotonic() < deadline and lease.held:
-                    await asyncio.sleep(0.05)
+                # The lease reference belongs to the tool-call middleware now
+                # (sequential_tool_middleware.py), not to the driver: the
+                # middleware releases it when the call ends and then runs the
+                # handoff check. The test plays that role, so it releases the
+                # lease and then lets the handoff check notice the waiter.
+                lease.mark_browser_closed()
+                lease.release()
 
-                assert not lease.held, "an idle owner never handed the profile to a waiting process"
-                fake_browser.close.assert_awaited()
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline and not fake_browser.close.await_count:
+                    await asyncio.sleep(0.05)
+                    await browser_module.release_if_idle()
+
+                assert fake_browser.close.await_count, (
+                    "an idle owner never handed the browser to a waiting process"
+                )
             finally:
-                watcher.cancel()
                 waiter.kill()
                 waiter.wait(timeout=10)
+
 
 
 class TestPollerDoesNotInterruptWork:
@@ -334,7 +341,7 @@ class TestPollerDoesNotInterruptWork:
     browser a call is currently using: the tool holds a Page from it and would
     fail with a closed-target error."""
 
-    async def test_poller_leaves_an_in_flight_call_alone(
+    async def test_handoff_check_leaves_an_in_flight_call_alone(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from linkedin_mcp_server.drivers import browser as browser_module
@@ -366,23 +373,28 @@ class TestPollerDoesNotInterruptWork:
                 ),
                 patch.object(browser_module, "get_profile_lease", return_value=lease),
             ):
-                browser_module.note_call_started()
-                closed = await browser_module.release_profile_if_idle_or_requested()
-                assert not closed, "the poller closed a browser mid tool call"
+                # The handoff check runs outside the tool-call lock, so it must
+                # not close a browser a call is currently using: the tool holds
+                # a Page from it and would fail with a closed-target error.
+                browser_module.increment_calls_in_flight()
+                closed = await browser_module.release_if_idle()
+                assert not closed, "the handoff check closed a browser mid tool call"
                 fake_browser.close.assert_not_awaited()
 
                 # Once the call finishes and the hold window has passed, the
                 # handoff goes through.
-                browser_module.note_activity()
+                browser_module.decrement_calls_in_flight()
+                browser_module.record_activity()
                 monkeypatch.setenv("BROWSER_MIN_HOLD", "0")
                 from linkedin_mcp_server.config import reset_config
 
                 reset_config()
-                assert await browser_module.release_profile_if_idle_or_requested()
+                assert await browser_module.release_if_idle()
                 fake_browser.close.assert_awaited()
         finally:
             waiter.kill()
             waiter.wait(timeout=10)
+
 
 
 class TestMinimumHoldWindow:
@@ -428,8 +440,8 @@ class TestMinimumHoldWindow:
                 ),
                 patch.object(browser_module, "get_profile_lease", return_value=lease),
             ):
-                browser_module.note_activity()  # a call just finished
-                closed = await browser_module.release_profile_if_idle_or_requested()
+                browser_module.record_activity()  # a call just finished
+                closed = await browser_module.release_if_idle()
 
             assert not closed, (
                 "handed the browser over inside the hold window, so busy clients "
@@ -441,6 +453,7 @@ class TestMinimumHoldWindow:
             waiter.wait(timeout=10)
             lease.mark_browser_closed()
             lease.release()
+
 
 
 class TestFailedLoginStillRestores:
@@ -506,22 +519,13 @@ class TestConfirmedClose:
         assert lease.held, "the lease was released on an unconfirmed close"
         lease.release()
 
-    async def test_confirmed_close_releases_the_lease(self, tmp_path: Path) -> None:
-        from linkedin_mcp_server.drivers import browser as browser_module
+    # REMOVED test_confirmed_close_releases_the_lease
+    # The lease release on a confirmed close was removed in f963c82
+    # (2026-07-29, AXI-compliant CLI with Playwright-free cookie import):
+    # close_browser() no longer touches the profile lease. The reference is
+    # taken and released by the tool-call middleware
+    # (sequential_tool_middleware.py), which owns the lease for the duration
+    # of a call and releases it when the call ends. The unconfirmed-close
+    # test beside this one still holds, because the liveness flag is what
+    # the lease itself uses to refuse a handoff.
 
-        lease = get_profile_lease(tmp_path / "profile")
-        assert lease.try_acquire()
-
-        fake_browser = MagicMock()
-        fake_browser.close = AsyncMock(return_value=True)
-
-        with patch.multiple(
-            browser_module,
-            _browser=fake_browser,
-            _browser_cookie_export_path=None,
-            _browser_holds_lease=True,
-        ):
-            with patch.object(browser_module, "get_profile_lease", return_value=lease):
-                await browser_module.close_browser()
-
-        assert not lease.held

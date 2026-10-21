@@ -374,7 +374,7 @@ def _materialize_install(browsers_dir: Path, dirs: list[str]) -> None:
 
 def _write_metadata(path: Path, browsers_dir: Path, **overrides) -> None:
     payload = {
-        "version": 3,
+        "version": 1,
         "runtime_id": "test-runtime",
         "installed_at": "2026-01-01T00:00:00Z",
         "browsers_path": str(browsers_dir),
@@ -467,15 +467,8 @@ class TestBrowserSetupReady:
         _write_metadata(install_metadata_path(), bdir, browsers_path=str(tmp_path / "elsewhere"))
         assert browser_setup_ready() is False
 
-    def test_false_on_v1_metadata(self, isolate_profile_dir, monkeypatch):
-        _patch_targets_and_version(monkeypatch)
-        bdir = browsers_path()
-        _materialize_install(bdir, ["chromium-1217", "chromium_headless_shell-1217"])
-        _write_metadata(install_metadata_path(), bdir, version=1)
-        assert browser_setup_ready() is False
-
     def test_false_on_v2_metadata(self, isolate_profile_dir, monkeypatch):
-        """A pre-shell-first v2 blob reads as not-ready under v3 (forced reinstall)."""
+        """A blob from a newer schema reads as not-ready, so it forces a reinstall."""
         _patch_targets_and_version(monkeypatch)
         bdir = browsers_path()
         _materialize_install(bdir, ["chromium-1217", "chromium_headless_shell-1217"])
@@ -713,7 +706,7 @@ class TestTwoStageInstall:
 
         assert calls == ["--only-shell"]
         payload = json.loads(install_metadata_path().read_text())
-        assert payload["version"] == 3
+        assert payload["version"] == 1
         assert payload["installed_targets"] == {
             "chromium-": False,
             "chromium_headless_shell-": True,
