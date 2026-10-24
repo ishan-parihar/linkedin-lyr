@@ -176,158 +176,88 @@ class TestSequentialToolExecutionMiddleware:
 
 
 class TestBrowserLifespan:
-    """The lifespan owns the background handoff poller.
+    """The lifespan starts the server and closes the browser on the way out.
 
-    Nothing else starts it, and nothing else stops it. Without the poller an
-    owner that goes idle never notices a waiting process; without the cancel a
-    stdio server would not exit.
+    The background handoff poller that used to live here was removed with
+    watch_for_handoff_requests in the Obscura-only rewrite (f963c82, 2026-07-29);
+    the Obscura-only mode has no handoff watcher. Handoff now happens after each
+    tool call, in sequential_tool_middleware.py, which calls release_if_idle().
+    The lifespan still owns the browser teardown, so that is what is pinned here.
     """
 
     @staticmethod
-    def _patched(monkeypatch, watcher):
+    def _patched(monkeypatch):
         """Replace the lifespan's collaborators, returning the close spy."""
         import linkedin_mcp_server.server as server_module
 
         monkeypatch.setattr(server_module, "initialize_bootstrap", MagicMock())
         monkeypatch.setattr(server_module, "get_runtime_policy", MagicMock())
         monkeypatch.setattr(server_module, "start_background_browser_setup_if_needed", AsyncMock())
-        monkeypatch.setattr(server_module, "watch_for_handoff_requests", watcher)
         close_browser = AsyncMock()
         monkeypatch.setattr(server_module, "close_browser", close_browser)
         return close_browser
 
-    async def test_poller_runs_for_the_life_of_the_server(self, monkeypatch):
+    async def test_the_browser_is_not_closed_before_the_lifespan_ends(self, monkeypatch):
         from linkedin_mcp_server.server import browser_lifespan
 
-        started = asyncio.Event()
-        cancelled = asyncio.Event()
-
-        async def watcher():
-            started.set()
-            try:
-                await asyncio.sleep(3600)
-            except asyncio.CancelledError:
-                cancelled.set()
-                raise
-
-        close_browser = self._patched(monkeypatch, watcher)
+        close_browser = self._patched(monkeypatch)
 
         async with browser_lifespan(MagicMock()):
-            await asyncio.wait_for(started.wait(), timeout=1)
-            assert not cancelled.is_set()
             close_browser.assert_not_awaited()
 
-        assert cancelled.is_set()
         close_browser.assert_awaited_once()
 
-    async def test_a_dead_poller_still_lets_the_browser_close(self, monkeypatch):
-        """A poller that raised must not take the browser down with it.
 
-        Awaiting a task that already failed re-raises its exception. If that
-        propagated out of the teardown, ``close_browser`` would be skipped and
-        Chromium would stay on the shared profile past shutdown, which is the
-        corruption the lease exists to prevent.
+    # REMOVED test_a_dead_poller_still_lets_the_browser_close
+    # The background handoff poller was removed with watch_for_handoff_requests
+    # in f963c82 (2026-07-29); the Obscura-only mode has no handoff watcher,
+    # so a poller cannot die and the browser teardown has nothing to shield.
+
+
+    # REMOVED test_a_fatal_poller_error_still_closes_but_propagates
+    # The background handoff poller was removed with watch_for_handoff_requests
+    # in f963c82 (2026-07-29); the Obscura-only mode has no handoff watcher,
+    # so there is no poller error to keep travelling.
+
+
+    async def test_cancelling_the_lifespan_itself_still_closes_the_browser(self, monkeypatch):
+        """A cancelled shutdown is no reason to leave a browser running on the
+        shared profile, so the close must happen even when the teardown is
+        interrupted.
+
+        The teardown no longer winds down a watcher, so the cancellation lands
+        in the lifespan body and the shutdown reports it rather than reporting
+        a success it did not have.
         """
         from linkedin_mcp_server.server import browser_lifespan
 
-        async def watcher():
-            raise RuntimeError("poller crashed")
-
-        close_browser = self._patched(monkeypatch, watcher)
-
-        async with browser_lifespan(MagicMock()):
-            # Let the doomed task reach its exception before teardown.
-            await asyncio.sleep(0)
-            await asyncio.sleep(0)
-
-        close_browser.assert_awaited_once()
-
-    async def test_a_fatal_poller_error_still_closes_but_propagates(self, monkeypatch):
-        """A BaseException is not ours to swallow, but the browser still closes.
-
-        ``Exception`` is caught deliberately; ``KeyboardInterrupt`` and friends
-        must keep travelling. What must not happen is that they take the profile
-        with them by skipping the close.
-        """
-        from linkedin_mcp_server.server import browser_lifespan
-
-        class Fatal(BaseException):
-            """Stands in for KeyboardInterrupt, which would abort the run."""
-
-        async def watcher():
-            raise Fatal("fatal")
-
-        close_browser = self._patched(monkeypatch, watcher)
-
-        with pytest.raises(Fatal):
-            async with browser_lifespan(MagicMock()):
-                await asyncio.sleep(0)
-                await asyncio.sleep(0)
-
-        close_browser.assert_awaited_once()
-
-    async def test_cancelling_the_lifespan_itself_is_not_swallowed(self, monkeypatch):
-        """Shutdown must not report success after being told to stop.
-
-        Cancelling the watcher and being cancelled ourselves surface as the
-        same exception in the same handler, because a watcher takes a moment to
-        wind down and a cancellation aimed at the teardown lands during exactly
-        that window. Absorbing it would leave whoever asked us to stop waiting
-        on a teardown that claimed to have finished normally.
-        """
-        from linkedin_mcp_server.server import browser_lifespan
-
-        async def watcher():
-            try:
-                await asyncio.sleep(3600)
-            except asyncio.CancelledError:
-                # Stands in for a poller mid-probe: cancellation is requested,
-                # but the task does not finish until it has unwound.
-                await asyncio.sleep(0.5)
-                raise
-
-        close_browser = self._patched(monkeypatch, watcher)
+        close_browser = self._patched(monkeypatch)
 
         async def run_server() -> None:
-            # Entered and exited by hand so the cancellation lands *during*
-            # teardown. Cancelling an `async with` body is a different path: it
-            # interrupts the yield and never reaches this handler.
-            lifespan = browser_lifespan(MagicMock())
-            await lifespan.__aenter__()
-            await asyncio.sleep(0.05)  # let the watcher reach its sleep
-
-            task = asyncio.current_task()
-            assert task is not None
-
-            async def cancel_during_teardown() -> None:
-                await asyncio.sleep(0.1)
-                task.cancel()
-
-            asyncio.create_task(cancel_during_teardown())
-            await lifespan.__aexit__(None, None, None)
+            async with browser_lifespan(MagicMock()):
+                await asyncio.sleep(3600)
 
         server = asyncio.create_task(run_server())
+        await asyncio.sleep(0.05)  # let the lifespan enter
+        server.cancel()
 
         with pytest.raises(asyncio.CancelledError):
             await server
 
-        # Still closed: a cancelled shutdown is no reason to leave a browser
-        # running on the shared profile.
         close_browser.assert_awaited_once()
+
 
     async def test_teardown_closes_the_browser_when_the_body_raises(self, monkeypatch):
         from linkedin_mcp_server.server import browser_lifespan
 
-        async def watcher():
-            await asyncio.sleep(3600)
-
-        close_browser = self._patched(monkeypatch, watcher)
+        close_browser = self._patched(monkeypatch)
 
         with pytest.raises(RuntimeError, match="boom"):
             async with browser_lifespan(MagicMock()):
                 raise RuntimeError("boom")
 
         close_browser.assert_awaited_once()
+
 
 
 class TestServerVersion:

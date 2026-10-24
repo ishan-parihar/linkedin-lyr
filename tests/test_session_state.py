@@ -186,7 +186,13 @@ def test_get_runtime_id_marks_container(monkeypatch):
     assert get_runtime_id() == "linux-amd64-container"
 
 
-def test_get_runtime_id_marks_container_from_cgroup_v2_mountinfo(monkeypatch):
+def test_get_runtime_id_ignores_cgroup_v2_mountinfo(monkeypatch):
+    """The mountinfo check was removed from _is_container_runtime on purpose.
+
+    Overlay mounts from a container leak into /proc/self/mountinfo on a host
+    that merely runs Docker, so the check reported every such host as a
+    container. Only strong signals count now: .dockerenv and cgroup markers.
+    """
     monkeypatch.setattr("linkedin_mcp_server.session_state.platform.system", lambda: "Linux")
     monkeypatch.setattr("linkedin_mcp_server.session_state.platform.machine", lambda: "x86_64")
     monkeypatch.setattr(
@@ -200,7 +206,7 @@ def test_get_runtime_id_marks_container_from_cgroup_v2_mountinfo(monkeypatch):
         ),
     )
 
-    assert get_runtime_id() == "linux-amd64-container"
+    assert get_runtime_id() == "linux-amd64-host"
 
 
 def test_get_runtime_id_ignores_non_root_overlay_mounts(monkeypatch):

@@ -128,3 +128,5 @@ gh api repos/{owner}/{repo}/issues/{pr}/comments   # follow-up reviews
 When you need up-to-date information about technologies used in this project, use the `btca-local` skill to search the actual source repos. `btca.config.jsonc` is the resource registry; every resource is pre-cloned at `~/.btca/agent/sandbox/<resourceName>` (e.g. `fastmcp`, `playwrightPython`). "Use btca with `<resource>` resource" means: search that clone. If a resource is missing from the sandbox, clone it with the url and branch from the manifest (the skill's "clone main by default" does not apply to registered resources).
 
 **New dependencies:** When adding a new dependency, always add its repo to `btca.config.jsonc` (verify the default branch first: `gh api repos/OWNER/REPO --jq '.default_branch'`) and clone it into the sandbox. Resource names are shared across projects in the sandbox, so pick a name that identifies the repo unambiguously (`playwrightPython`, not `playwright`).
+
+*(Commands reviewed 2026-10-19: uv, ruff, ty and pytest are still the toolchain and the Obscura CDP backend is still the rule, so the list stands.)*

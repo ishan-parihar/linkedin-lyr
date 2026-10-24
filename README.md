@@ -1,5 +1,8 @@
 # LinkedIn MCP Server
 
+
+- [Page index](docs/PAGE-INDEX.md) — every active doc and the question it owns.
+
 <!-- T2I HERO SPEC — Subject: a LinkedIn data engine — a professional profile card feeding profiles, companies, jobs, and messages through your own browser session into an MCP server for agents. Composition: profile card → browser-session pipeline → agent. Palette: linkedin blue #0a66c2 → dark slate → clean white cards. Style: dark flat vector, connection-node motif, no text. 16:9. -->
 
 **Give AI assistants like Claude access to LinkedIn profiles, companies, jobs, and messaging through your own browser session.**

@@ -20,6 +20,7 @@ from linkedin_mcp_server.scraping.extractor import (
     _CONTENT_DATE_POSTED_MAP,
     _RATE_LIMITED_MSG,
     _build_feed_references,
+    _content_wait_ms,
     _truncate_linkedin_noise,
     strip_conversation_chrome,
     strip_linkedin_noise,
@@ -3697,7 +3698,7 @@ class TestCompanyPeopleExtraction:
         wait_kwargs = mock_page.wait_for_function.call_args.kwargs
         assert "/in/" in wait_predicate
         assert "querySelectorAll" in wait_predicate
-        assert wait_kwargs["timeout"] == 5000
+        assert wait_kwargs["timeout"] == _content_wait_ms(5000)
         mock_scroll.assert_awaited_once()
 
     async def test_continues_extraction_on_wait_timeout(self, mock_page):
