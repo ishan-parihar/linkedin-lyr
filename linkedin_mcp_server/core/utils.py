@@ -3,7 +3,9 @@
 import asyncio
 import logging
 
-from patchright.async_api import Page, TimeoutError as PlaywrightTimeoutError
+from patchright.async_api import Page
+
+from .timeout_errors import TIMEOUT_ERRORS
 
 from .exceptions import RateLimitError
 
@@ -61,7 +63,7 @@ async def detect_rate_limit(page: Page) -> None:
                 )
     except RateLimitError:
         raise
-    except PlaywrightTimeoutError:
+    except TIMEOUT_ERRORS:
         pass
 
 
@@ -100,7 +102,7 @@ async def scroll_job_sidebar(page: Page, pause_time: float = 1.0, max_scrolls: i
     # Wait for at least one job card link to render before scrolling
     try:
         await page.wait_for_selector('a[href*="/jobs/view/"]', timeout=5000)
-    except PlaywrightTimeoutError:
+    except TIMEOUT_ERRORS:
         logger.debug("No job card links found, skipping sidebar scroll")
         return
 
@@ -164,7 +166,7 @@ async def handle_modal_close(page: Page) -> bool:
             await asyncio.sleep(0.5)
             logger.debug("Closed modal")
             return True
-    except PlaywrightTimeoutError:
+    except TIMEOUT_ERRORS:
         pass
     except Exception as e:
         logger.debug("Error closing modal: %s", e)

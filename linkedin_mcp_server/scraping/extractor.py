@@ -11,7 +11,7 @@ import re
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import parse_qs, quote_plus, urljoin, urlparse
 
-from patchright.async_api import Page, TimeoutError as PlaywrightTimeoutError
+from patchright.async_api import Page
 
 from linkedin_mcp_server.core import (
     detect_auth_barrier,
@@ -26,6 +26,10 @@ from linkedin_mcp_server.core.exceptions import (
     LinkedInScraperException,
     RateLimitError,
 )
+# ISH-1777: the live Obscura driver raises VANILLA playwright's TimeoutError,
+# which is a DIFFERENT class from patchright's. Catch the tuple, never the
+# single patchright class, or every wait timeout escapes as a tool failure.
+from linkedin_mcp_server.core.timeout_errors import TIMEOUT_ERRORS
 from linkedin_mcp_server.debug_trace import record_page_trace
 from linkedin_mcp_server.debug_utils import stabilize_navigation
 from linkedin_mcp_server.error_diagnostics import build_issue_diagnostics
@@ -63,6 +67,53 @@ def _content_wait_ms(default_ms: int = 10000) -> int:
     except ValueError:
         nav = 90000
     return max(default_ms, min(nav // 4, 120000))
+
+
+def _messaging_shell_wait_ms() -> int:
+    """Bounded wait for the /messaging/ SPA to paint ANY body content.
+
+    ISH-1777: the content wait is 60s on this deployment
+    (``LINKEDIN_NAV_TIMEOUT_MS=240000`` -> ``240000 // 4``). When the
+    messaging route serves an empty JS shell that wait is a guaranteed dead
+    wait, and the caller used to pay it in full before the failure escaped
+    as a generic ``TimeoutError``. This budget is deliberately SHORT and
+    separate from the content budget: it only answers "did the SPA mount at
+    all?", not "is the content populated?".
+
+    Override with ``LINKEDIN_MESSAGING_SHELL_WAIT_MS`` (milliseconds).
+    """
+    raw = os.environ.get("LINKEDIN_MESSAGING_SHELL_WAIT_MS", "").strip()
+    if raw:
+        try:
+            return max(1000, int(raw))
+        except ValueError:
+            logger.warning(
+                "Invalid LINKEDIN_MESSAGING_SHELL_WAIT_MS=%r — using default", raw
+            )
+    return 8000
+
+
+def _messaging_content_wait_ms() -> int:
+    """Bounded content wait for the /messaging/ route.
+
+    The generic content budget is a quarter of the NAV budget, which is 60s
+    on this deployment — long enough that a route which renders chrome but
+    never populates still burns a full minute per call (ISH-1777). The
+    messaging surface only needs a short window: the navigation has already
+    completed when this wait starts, and a healthy messaging app paints its
+    conversation list within a couple of seconds of ``domcontentloaded``.
+
+    Override with ``LINKEDIN_MESSAGING_CONTENT_WAIT_MS`` (milliseconds).
+    """
+    raw = os.environ.get("LINKEDIN_MESSAGING_CONTENT_WAIT_MS", "").strip()
+    if raw:
+        try:
+            return max(1000, int(raw))
+        except ValueError:
+            logger.warning(
+                "Invalid LINKEDIN_MESSAGING_CONTENT_WAIT_MS=%r — using default", raw
+            )
+    return 20000
 
 # Pacing between page navigations
 _NAV_DELAY = 2.0
@@ -1098,7 +1149,7 @@ class LinkedInExtractor:
         await self._page.keyboard.press("Escape")
         try:
             await self._page.wait_for_selector(_DIALOG_SELECTOR, state="hidden", timeout=3000)
-        except PlaywrightTimeoutError:
+        except TIMEOUT_ERRORS:
             pass
 
     async def _get_premium_upsell_message(self, *, timeout: int = 2500) -> str | None:
@@ -1113,7 +1164,7 @@ class LinkedInExtractor:
         locator = self._page.locator(_DIALOG_PREMIUM_LINK_SELECTOR).first
         try:
             await locator.wait_for(state="visible", timeout=timeout)
-        except PlaywrightTimeoutError:
+        except TIMEOUT_ERRORS:
             return None
         except Exception:
             try:
@@ -1170,7 +1221,7 @@ class LinkedInExtractor:
         try:
             await self._page.wait_for_selector("[role='menu']", timeout=3000)
             return True
-        except PlaywrightTimeoutError:
+        except TIMEOUT_ERRORS:
             logger.debug("More menu did not appear after click")
             return False
 
@@ -1204,7 +1255,7 @@ class LinkedInExtractor:
         try:
             await first.wait_for(state="visible", timeout=timeout)
             return True
-        except PlaywrightTimeoutError:
+        except TIMEOUT_ERRORS:
             return False
         except Exception:
             try:
@@ -1244,8 +1295,85 @@ class LinkedInExtractor:
                 arg={"minimumLength": minimum_length},
                 timeout=timeout,
             )
-        except PlaywrightTimeoutError:
+        except TIMEOUT_ERRORS:
             logger.debug("%s content did not appear", log_context)
+
+    async def _wait_for_messaging_paint(self, *, log_context: str) -> bool:
+        """Wait for the /messaging/ SPA to paint ANY body content.
+
+        Returns True as soon as ``document.body.innerText`` is non-empty —
+        the app shell mounted and hydration started, so the caller can hand
+        off to :meth:`_wait_for_main_text` with the full content budget.
+
+        Returns False when the route stayed a **completely empty JS shell**
+        — ``title='LinkedIn'`` with zero body text and no ``<main>`` — for
+        the whole short shell budget. That signature (ISH-1777, observed on
+        every failing ``/messaging/`` navigation of 2026-10-24) never
+        satisfies the content predicate, so waiting the full content budget
+        is a guaranteed dead wait: at ``LINKEDIN_NAV_TIMEOUT_MS=240000`` the
+        content wait is 60s per call. Callers must convert False into the
+        explicit ``messaging_route_empty`` verdict instead — the caller can
+        then route around a broken surface; a 60s generic timeout cannot be
+        distinguished from a slow LinkedIn.
+        """
+        wait_ms = _messaging_shell_wait_ms()
+        try:
+            await self._page.wait_for_function(
+                """() => {
+                    const body = document.body;
+                    if (!body) return false;
+                    // innerText honours CSS visibility, so a page whose
+                    // markup is present but hidden (the empty JS shell this
+                    // guard exists for) reads as empty here while
+                    // textContent would not. 'main' and the conversation
+                    // rows are the messaging app's own structure.
+                    if ((body.innerText || '').trim().length > 0) return true;
+                    if (document.querySelector('main')) return true;
+                    if (document.querySelector('li label[aria-label]')) return true;
+                    return false;
+                }""",
+                timeout=wait_ms,
+            )
+            return True
+        except TIMEOUT_ERRORS:
+            logger.warning(
+                "%s: /messaging/ rendered an empty JS shell (no body text, no "
+                "<main>, no conversation rows within %dms) — reporting "
+                "messaging_route_empty instead of waiting out the content "
+                "budget",
+                log_context,
+                wait_ms,
+            )
+            return False
+
+    def _messaging_route_empty_result(
+        self, section_name: str, *, wait_ms: int
+    ) -> dict[str, Any]:
+        """Explicit, fast verdict for an unpainted /messaging/ route.
+
+        Same shape as the SSR-JSON verdict above: a compact section body
+        that explains the failure, plus a machine-readable ``status`` so
+        callers can branch on it without parsing prose.
+        """
+        result = self._single_section_result(
+            self._page.url,
+            section_name,
+            "[messaging_route_empty] LinkedIn rendered an empty JS shell "
+            "for /messaging/ — no body text appeared within "
+            f"{wait_ms // 1000}s of navigation, so the messaging SPA never "
+            "mounted. The session is not dead: the browser stays "
+            "authenticated and other routes render normally. This is a "
+            "surface-level rendering/egress flag. Retry later, from a "
+            "different egress, or open a known thread directly via "
+            "get_conversation with a thread_id.",
+        )
+        result["status"] = "messaging_route_empty"
+        result["diagnostic"] = {
+            "route": "messaging",
+            "shell_wait_ms": wait_ms,
+            "url": self._page.url,
+        }
+        return result
 
     async def _scroll_main_scrollable_region(
         self,
@@ -1356,7 +1484,7 @@ class LinkedInExtractor:
 
         try:
             await self._page.wait_for_selector("main")
-        except PlaywrightTimeoutError:
+        except TIMEOUT_ERRORS:
             logger.debug("No <main> element found on %s", url)
 
         await handle_modal_close(self._page)
@@ -1370,7 +1498,7 @@ class LinkedInExtractor:
                 }""",
                 timeout=_content_wait_ms(10000),
             )
-        except PlaywrightTimeoutError:
+        except TIMEOUT_ERRORS:
             logger.debug("Feed content did not appear on %s", url)
 
         # The feed has its own scroll container — window.scrollTo is a no-op.
@@ -1523,7 +1651,7 @@ class LinkedInExtractor:
         # Wait for main content to render
         try:
             await self._page.wait_for_selector("main")
-        except PlaywrightTimeoutError:
+        except TIMEOUT_ERRORS:
             logger.debug("No <main> element found on %s", url)
 
         # Dismiss any modals blocking content
@@ -1548,7 +1676,7 @@ class LinkedInExtractor:
                     }""",
                     timeout=_content_wait_ms(10000),
                 )
-            except PlaywrightTimeoutError:
+            except TIMEOUT_ERRORS:
                 logger.debug("Activity feed content did not appear on %s", url)
 
         # Search results pages load a placeholder first then fill in results
@@ -1564,7 +1692,7 @@ class LinkedInExtractor:
                     }""",
                     timeout=_content_wait_ms(10000),
                 )
-            except PlaywrightTimeoutError:
+            except TIMEOUT_ERRORS:
                 logger.debug("Search results content did not appear on %s", url)
 
         # Company people pages (/company/<slug>/people/) initially render only
@@ -1585,7 +1713,7 @@ class LinkedInExtractor:
                     }""",
                     timeout=_content_wait_ms(5000),
                 )
-            except PlaywrightTimeoutError:
+            except TIMEOUT_ERRORS:
                 logger.debug("Company people listing did not appear on %s", url)
 
         # Profile detail pages (/details/experience/, /details/education/, etc.)
@@ -1606,7 +1734,7 @@ class LinkedInExtractor:
                     }""",
                     timeout=_content_wait_ms(10000),
                 )
-            except PlaywrightTimeoutError:
+            except TIMEOUT_ERRORS:
                 logger.debug("Detail section content did not appear on %s", url)
 
         # Detail pages paginate with a "Show more" button inside <main>, not scroll.
@@ -1627,7 +1755,7 @@ class LinkedInExtractor:
                     await target.scroll_into_view_if_needed(timeout=2000)
                     await target.click(timeout=2000)
                     await asyncio.sleep(1.0)
-                except PlaywrightTimeoutError:
+                except TIMEOUT_ERRORS:
                     logger.debug("Show more click timed out after %d clicks", i)
                     break
                 except Exception as e:
@@ -1711,7 +1839,7 @@ class LinkedInExtractor:
         # Wait for the dialog/modal to render (LinkedIn uses native <dialog>)
         try:
             await self._page.wait_for_selector("dialog[open], .artdeco-modal__content")
-        except PlaywrightTimeoutError:
+        except TIMEOUT_ERRORS:
             logger.debug("No modal overlay found on %s, falling back to main", url)
 
         # NOTE: Do NOT call handle_modal_close() here — the contact-info
@@ -1973,7 +2101,7 @@ class LinkedInExtractor:
                             state="visible",
                             timeout=_content_wait_ms(3000),
                         )
-                    except PlaywrightTimeoutError:
+                    except TIMEOUT_ERRORS:
                         logger.debug("Note textarea did not appear")
                     note_limit_message = await self._get_premium_upsell_message()
                     if note_limit_message is not None:
@@ -2036,7 +2164,7 @@ class LinkedInExtractor:
 
         try:
             await self._page.wait_for_selector(_DIALOG_SELECTOR, state="hidden", timeout=5000)
-        except PlaywrightTimeoutError:
+        except TIMEOUT_ERRORS:
             logger.debug("Invite dialog did not close after submit")
 
         return True, note_filled, None
@@ -2086,7 +2214,7 @@ class LinkedInExtractor:
                     state="visible",
                     timeout=_content_wait_ms(3000),
                 )
-            except PlaywrightTimeoutError:
+            except TIMEOUT_ERRORS:
                 logger.debug("Note textarea did not appear during quota probe")
 
         note_limit_message = await self._get_premium_upsell_message()
@@ -2329,7 +2457,7 @@ class LinkedInExtractor:
 
         try:
             await self._page.wait_for_selector("main", timeout=5000)
-        except PlaywrightTimeoutError:
+        except TIMEOUT_ERRORS:
             logger.debug("No <main> element found on %s", url)
 
         await handle_modal_close(self._page)
@@ -2439,7 +2567,7 @@ class LinkedInExtractor:
 
             try:
                 await self._page.wait_for_selector("main")
-            except PlaywrightTimeoutError:
+            except TIMEOUT_ERRORS:
                 logger.debug("No <main> on Show all page for section %s", section_key)
 
             await handle_modal_close(self._page)
@@ -2663,7 +2791,7 @@ class LinkedInExtractor:
             try:
                 await candidate.wait_for(state="visible")
                 return candidate
-            except PlaywrightTimeoutError:
+            except TIMEOUT_ERRORS:
                 continue
 
         return None
@@ -2728,7 +2856,7 @@ class LinkedInExtractor:
                 arg={"expected": message},
             )
             return True
-        except PlaywrightTimeoutError:
+        except TIMEOUT_ERRORS:
             return False
 
     async def _dismiss_message_ui(self) -> None:
@@ -2791,7 +2919,15 @@ class LinkedInExtractor:
         # threads that the verify-after-send workflow needs (issue #434).
         await self._navigate_to_page("https://www.linkedin.com/messaging/")
         await detect_rate_limit(self._page)
-        await self._wait_for_main_text(log_context="Messaging inbox")
+        if not await self._wait_for_messaging_paint(log_context="Messaging inbox"):
+            # Empty shell: there is nothing to scan here and nothing the
+            # search fallback can add either — both share the broken
+            # surface. Return fast so get_conversation fails with its
+            # normal "could not find" verdict instead of burning 2x60s.
+            return []
+        await self._wait_for_main_text(
+            log_context="Messaging inbox", timeout=_messaging_content_wait_ms()
+        )
         await handle_modal_close(self._page)
         await self._scroll_main_scrollable_region(position="bottom", attempts=2, pause_time=0.5)
         urls = _match(
@@ -2811,7 +2947,11 @@ class LinkedInExtractor:
         )
         await detect_rate_limit(self._page)
         await handle_modal_close(self._page)
-        await self._wait_for_main_text(log_context="Messaging search results")
+        if not await self._wait_for_messaging_paint(log_context="Messaging search results"):
+            return []
+        await self._wait_for_main_text(
+            log_context="Messaging search results", timeout=_messaging_content_wait_ms()
+        )
         return _match(
             await self._extract_conversation_thread_refs(
                 limit=None, context="search", name_filter=display_name
@@ -2835,7 +2975,7 @@ class LinkedInExtractor:
             await self._page.wait_for_selector(
                 "main", timeout=_content_wait_ms(10000)
             )
-        except PlaywrightTimeoutError:
+        except TIMEOUT_ERRORS:
             logger.debug("Profile page did not load for %s", linkedin_username)
 
         await handle_modal_close(self._page)
@@ -2858,7 +2998,7 @@ class LinkedInExtractor:
                 )
 
             await self._navigate_to_page(thread_urls[index])
-        except PlaywrightTimeoutError as exc:
+        except TIMEOUT_ERRORS as exc:
             raise LinkedInScraperException(
                 "Messaging search results did not load in time."
             ) from exc
@@ -3085,7 +3225,7 @@ class LinkedInExtractor:
         main_found = True
         try:
             await self._page.wait_for_selector("main")
-        except PlaywrightTimeoutError:
+        except TIMEOUT_ERRORS:
             logger.debug("No <main> element found on %s", url)
             main_found = False
 
@@ -3361,7 +3501,7 @@ class LinkedInExtractor:
         main_found = True
         try:
             await self._page.wait_for_selector("main")
-        except PlaywrightTimeoutError:
+        except TIMEOUT_ERRORS:
             logger.debug("No <main> element found on %s", url)
             main_found = False
 
@@ -3734,7 +3874,13 @@ class LinkedInExtractor:
         url = "https://www.linkedin.com/messaging/"
         await self._navigate_to_page(url)
         await detect_rate_limit(self._page)
-        await self._wait_for_main_text(log_context="Messaging inbox")
+        if not await self._wait_for_messaging_paint(log_context="Messaging inbox"):
+            return self._messaging_route_empty_result(
+                "inbox", wait_ms=_messaging_shell_wait_ms()
+            )
+        await self._wait_for_main_text(
+            log_context="Messaging inbox", timeout=_messaging_content_wait_ms()
+        )
         await handle_modal_close(self._page)
 
         scrolls = max(1, limit // 10)
@@ -3808,7 +3954,7 @@ class LinkedInExtractor:
                 state="attached",
                 timeout=_content_wait_ms(10000),
             )
-        except PlaywrightTimeoutError:
+        except TIMEOUT_ERRORS:
             logger.debug(
                 "conversation labels did not appear within 10s (context=%s)",
                 context,
@@ -3959,7 +4105,13 @@ class LinkedInExtractor:
         await self._navigate_to_page(search_url)
         await detect_rate_limit(self._page)
         await handle_modal_close(self._page)
-        await self._wait_for_main_text(log_context="Messaging search")
+        if not await self._wait_for_messaging_paint(log_context="Messaging search"):
+            return self._messaging_route_empty_result(
+                "search_results", wait_ms=_messaging_shell_wait_ms()
+            )
+        await self._wait_for_main_text(
+            log_context="Messaging search", timeout=_messaging_content_wait_ms()
+        )
 
         raw_result = await self._extract_root_content(["main"])
         raw = raw_result["text"]
@@ -4036,7 +4188,7 @@ class LinkedInExtractor:
             await self._page.wait_for_selector(
                 "main", timeout=_content_wait_ms(10000)
             )
-        except PlaywrightTimeoutError:
+        except TIMEOUT_ERRORS:
             logger.debug("Profile page did not load for %s", linkedin_username)
 
         await handle_modal_close(self._page)
@@ -4069,7 +4221,7 @@ class LinkedInExtractor:
 
         try:
             await self._page.wait_for_selector("main")
-        except PlaywrightTimeoutError:
+        except TIMEOUT_ERRORS:
             logger.debug("Compose page did not fully load for %s", linkedin_username)
 
         await handle_modal_close(self._page)
