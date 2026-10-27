@@ -128,7 +128,7 @@ For any MCP-compatible client, use the standard configuration:
 }
 ```
 
-## Troubleshooting
+## MCP Setup Troubleshooting
 
 ### PATH Issues
 
@@ -156,7 +156,7 @@ If you get "command not found" errors:
    }
    ```
 
-### Session Issues
+### MCP Session Issues
 
 If the MCP server can't find cookies:
 
@@ -189,7 +189,7 @@ If you get permission errors:
    chmod 600 ~/.linkedin/cookies.json
    ```
 
-## Environment Variables
+## MCP Environment Variables
 
 You can configure the MCP server using environment variables:
 

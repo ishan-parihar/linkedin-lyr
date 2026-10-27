@@ -22,7 +22,7 @@ A Model Context Protocol (MCP) server that connects AI assistants to LinkedIn. A
 - **Post Search**: Search posts/content globally by keyword (the "Posts" tab) with an optional recency filter
 - **Compact References**: Return typed per-section links alongside readable text without shipping full-page markdown
 
-## Quick Start
+## Docker Hub Quick Start
 
 Create a browser profile locally, then mount it into Docker. You still need [uv](https://docs.astral.sh/uv/getting-started/installation/) installed on the host for the one-time `uvx linkedin-lyr@latest --login` step. Docker already includes its own Chromium runtime, so the managed Patchright Chromium browser download used by MCPB/`uvx` is not needed here.
 
@@ -67,7 +67,7 @@ This opens a browser window where you log in manually (5 minute timeout for 2FA,
 > directory. Do not run `--login` or `--logout` on the host while a container is
 > running.
 
-## Environment Variables
+## Docker Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
