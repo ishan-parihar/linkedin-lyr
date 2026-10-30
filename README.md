@@ -382,3 +382,7 @@ If you find this project useful, consider supporting ongoing development:
 [![Donate](https://img.shields.io/badge/Donate-Razorpay-3395FF?style=flat-square)](https://rzp.io/rzp/ishan-parihar)
 
 Your support funds new features, releases, and infrastructure for the whole ecosystem.
+
+## Updating
+
+Use `linkedin-lyr update --check` to check without changing the installation, or `linkedin-lyr update` to update it. `linkedin-lyr upgrade` is an alias. The command delegates to the manager that owns this installation (`uv`, `pipx`, or `pip`) and refuses editable, local-checkout, system, or unknown installs instead of replacing package-manager-owned files. For example: `uv tool upgrade linkedin-lyr`.

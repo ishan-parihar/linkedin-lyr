@@ -6,6 +6,12 @@ import os
 
 def main() -> None:
     """Handle tool interception or delegate to MCP server mode."""
+    if len(sys.argv) > 1 and sys.argv[1] in {"update", "upgrade"}:
+        from linkedin_mcp_server.updater import run_update
+
+        raise SystemExit(
+            run_update(sys.argv[2:], application="linkedin-lyr", package="linkedin-lyr")
+        )
     # Source BrowseFleet/Obscura env files BEFORE any backend decision.
     # Without this, LINKEDIN_BROWSER_BACKEND=browsefleet in ~/.linkedin-lyr/bf.env
     # is invisible to should_use_browsefleet() in direct-tool mode, and every

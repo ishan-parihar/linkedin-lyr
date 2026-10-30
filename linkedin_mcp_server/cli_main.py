@@ -736,6 +736,12 @@ This shows LinkedIn session state on every agent session start.
 
 def main() -> None:
     """Main application entry point."""
+    if raw_args and raw_args[0] in {"update", "upgrade"}:
+        from linkedin_mcp_server.updater import run_update
+
+        raise SystemExit(
+            run_update(raw_args[1:], application="linkedin-lyr", package="linkedin-lyr")
+        )
     config = get_config()
 
     # Configure logging
